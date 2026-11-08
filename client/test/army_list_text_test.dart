@@ -207,19 +207,11 @@ class _ImportApiClient extends ApiClient {
 
   @override
   Future<JsonMap> builderConfiguration(String factionId) async => {
-        'battle_formations': [
-          {'id': 'despoilers', 'name': 'Despoilers'},
-        ],
-        'spell_lores': [
-          {'id': 'damned', 'name': 'Lore of the Damned'},
-        ],
-        'prayer_lores': [],
-        'manifestation_lores': [
-          {'id': 'primal-energy', 'name': 'Primal Energy'},
-        ],
-        'terrain': [
-          {'id': 'nexus', 'name': 'Nexus Chaotica'},
-        ],
+        'battle_formations': _namedItems('despoilers', 'Despoilers'),
+        'spell_lores': _namedItems('damned', 'Lore of the Damned'),
+        'prayer_lores': <JsonMap>[],
+        'manifestation_lores': _namedItems('primal-energy', 'Primal Energy'),
+        'terrain': _namedItems('nexus', 'Nexus Chaotica'),
         'regiments_of_renown': [
           {
             'id': 'curse-steel',
@@ -228,38 +220,49 @@ class _ImportApiClient extends ApiClient {
           },
         ],
         'enhancements': {
-          'artefacts': [
-            {'id': 'artifact', 'name': "Realmwarper's Twist-rune"},
-          ],
-          'heroic_traits': [
-            {'id': 'trait', 'name': 'Deathmonger'},
-          ],
-          'other': [
-            {
-              'id': 'banners',
-              'name': 'Ensorcelled Banners',
-              'abilities': [
-                {'id': 'banner', 'name': 'The Banner of Screaming Flesh'},
-              ],
-            },
-            {
-              'id': 'brands',
-              'name': 'Brands of the Dark Gods',
-              'abilities': [
-                {'id': 'brand', 'name': 'Brand of the Unaligned'},
-              ],
-            },
-            {
-              'id': 'mutations',
-              'name': 'Moulder Mutations',
-              'required_keywords': ['Cavalry'],
-              'excluded_keywords': ['Hero'],
-              'abilities': [
-                {'id': 'mutation', 'name': 'Mutation'},
-              ],
-            },
-          ],
+          'artefacts': _namedItems('artifact', "Realmwarper's Twist-rune"),
+          'heroic_traits': _namedItems('trait', 'Deathmonger'),
+          'other': _otherEnhancements(),
         },
+      };
+
+  List<JsonMap> _namedItems(String id, String name) => [
+        {'id': id, 'name': name},
+      ];
+
+  List<JsonMap> _otherEnhancements() => [
+        _enhancementGroup(
+          'banners',
+          'Ensorcelled Banners',
+          {'id': 'banner', 'name': 'The Banner of Screaming Flesh'},
+        ),
+        _enhancementGroup(
+          'brands',
+          'Brands of the Dark Gods',
+          {'id': 'brand', 'name': 'Brand of the Unaligned'},
+        ),
+        _enhancementGroup(
+          'mutations',
+          'Moulder Mutations',
+          {'id': 'mutation', 'name': 'Mutation'},
+          requiredKeywords: ['Cavalry'],
+          excludedKeywords: ['Hero'],
+        ),
+      ];
+
+  JsonMap _enhancementGroup(
+    String id,
+    String name,
+    JsonMap ability, {
+    List<String>? requiredKeywords,
+    List<String>? excludedKeywords,
+  }) =>
+      {
+        'id': id,
+        'name': name,
+        if (requiredKeywords != null) 'required_keywords': requiredKeywords,
+        if (excludedKeywords != null) 'excluded_keywords': excludedKeywords,
+        'abilities': [ability],
       };
 
   @override
@@ -285,45 +288,52 @@ class _ImportApiClient extends ApiClient {
   }) async =>
       {
         'required_units': [],
-        'items': [
-          {
-            'unit': {
-              'id': 'varanguard',
-              'name': 'Varanguard',
-              'modelCount': 3,
-              'points': 290,
-            },
-            'option_id': 'varanguard-option',
-          },
-          {
-            'unit': {
-              'id': 'chaos-lord',
-              'name': 'Chaos Lord on Daemonic Mount',
-              'modelCount': 1,
-              'points': 130,
-            },
-            'option_id': 'lord-option',
-          },
-          {
-            'unit': {
-              'id': 'chaos-knights',
-              'name': 'Chaos Knights',
-              'modelCount': 5,
-              'points': 240,
-              'referenceKeywords': 'Cavalry',
-            },
-            'option_id': 'knights-option',
-          },
-          {
-            'unit': {
-              'id': 'sloven-knights',
-              'name': 'Scourge of Aqshy: Sloven Knights',
-              'modelCount': 3,
-              'points': 180,
-            },
-            'option_id': 'sloven-knights-option',
-          },
-        ],
+        'items': _regimentChoices(),
+      };
+
+  List<JsonMap> _regimentChoices() => [
+        _unitChoice('varanguard', 'Varanguard', 3, 290, 'varanguard-option'),
+        _unitChoice(
+          'chaos-lord',
+          'Chaos Lord on Daemonic Mount',
+          1,
+          130,
+          'lord-option',
+        ),
+        _unitChoice(
+          'chaos-knights',
+          'Chaos Knights',
+          5,
+          240,
+          'knights-option',
+          referenceKeywords: 'Cavalry',
+        ),
+        _unitChoice(
+          'sloven-knights',
+          'Scourge of Aqshy: Sloven Knights',
+          3,
+          180,
+          'sloven-knights-option',
+        ),
+      ];
+
+  JsonMap _unitChoice(
+    String id,
+    String name,
+    int modelCount,
+    int points,
+    String optionId, {
+    String? referenceKeywords,
+  }) =>
+      {
+        'unit': {
+          'id': id,
+          'name': name,
+          'modelCount': modelCount,
+          'points': points,
+          if (referenceKeywords != null) 'referenceKeywords': referenceKeywords,
+        },
+        'option_id': optionId,
       };
 
   @override
