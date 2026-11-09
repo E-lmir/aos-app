@@ -1,6 +1,10 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+
+export 'api_exception.dart';
+
+import 'api_exception.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 
@@ -371,13 +375,4 @@ class ApiClient {
   }
 
   void close() => _httpClient.close();
-}
-
-class ApiException implements Exception {
-  const ApiException(this.message);
-
-  final String message;
-
-  @override
-  String toString() => message;
 }
