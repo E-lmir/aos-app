@@ -5,6 +5,8 @@ import 'package:uuid/uuid.dart';
 
 import 'api_client.dart';
 
+part 'models/saved_army_state.dart';
+
 class SavedArmyStore {
   static const _stateKey = 'saved_armies_state';
   static const _uuid = Uuid();
@@ -103,11 +105,4 @@ class SavedArmyStore {
     );
     if (!saved) throw StateError('Could not save armies on this device.');
   }
-}
-
-class _SavedArmyState {
-  _SavedArmyState(this.armies, this.deletedIds);
-
-  final List<JsonMap> armies;
-  final List<String> deletedIds;
 }
