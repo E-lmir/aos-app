@@ -10,33 +10,12 @@ import 'package:material_ui/material_ui.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+export 'data_image_cache_status.dart';
+export 'image_cache_download_result.dart';
+
+import 'data_image_cache_status.dart';
+import 'image_cache_download_result.dart';
 import 'json_types.dart';
-
-class DataImageCacheStatus {
-  const DataImageCacheStatus({
-    required this.isComplete,
-    required this.imageCount,
-    required this.dataVersion,
-  });
-
-  final bool isComplete;
-  final int imageCount;
-  final int? dataVersion;
-}
-
-class ImageCacheDownloadResult {
-  const ImageCacheDownloadResult({
-    required this.total,
-    required this.completed,
-    required this.failed,
-    required this.cancelled,
-  });
-
-  final int total;
-  final int completed;
-  final int failed;
-  final bool cancelled;
-}
 
 class DataImageCache {
   DataImageCache._();
@@ -69,32 +48,39 @@ class DataImageCache {
     if (data is! Map) {
       throw const FormatException('Image catalog has an invalid data section.');
     }
-
     final urls = <String>{};
-    for (final rows in data.values) {
-      if (rows is! List) {
+    _collectImageUrls(data.values, urls);
+    return urls.toList()..sort();
+  }
+
+  static void _collectImageUrls(Iterable<Object?> tables, Set<String> urls) {
+    for (final table in tables) {
+      if (table is! List) {
         throw const FormatException('Image catalog contains an invalid table.');
       }
-      for (final row in rows) {
+      for (final row in table) {
         if (row is! Map) {
           throw const FormatException('Image catalog contains an invalid row.');
         }
-        for (final entry in row.entries) {
-          if (!_imageField.hasMatch(entry.key.toString()) ||
-              entry.value is! String) {
-            continue;
-          }
-          final value = (entry.value as String).trim();
-          final uri = Uri.tryParse(value);
-          if (uri != null &&
-              (uri.scheme == 'http' || uri.scheme == 'https') &&
-              uri.host.isNotEmpty) {
-            urls.add(value);
-          }
-        }
+        _collectRowUrls(row, urls);
       }
     }
-    return urls.toList()..sort();
+  }
+
+  static void _collectRowUrls(Map<dynamic, dynamic> row, Set<String> urls) {
+    for (final entry in row.entries) {
+      if (!_imageField.hasMatch(entry.key.toString()) ||
+          entry.value is! String) {
+        continue;
+      }
+      final value = (entry.value as String).trim();
+      final uri = Uri.tryParse(value);
+      if (uri != null &&
+          (uri.scheme == 'http' || uri.scheme == 'https') &&
+          uri.host.isNotEmpty) {
+        urls.add(value);
+      }
+    }
   }
 
   static Future<ImageCacheDownloadResult> cacheAll(
@@ -125,12 +111,28 @@ class DataImageCache {
 
     final workers = math.min(_downloadConcurrency, urls.length);
     await Future.wait(List.generate(workers, (_) => downloadWorker()));
-    onProgress(completed, urls.length);
+    return _finishDownload(
+      urls.length,
+      completed,
+      failed,
+      shouldCancel,
+      onProgress,
+    );
+  }
+
+  static ImageCacheDownloadResult _finishDownload(
+    int total,
+    int completed,
+    int failed,
+    bool Function() shouldCancel,
+    void Function(int completed, int total) onProgress,
+  ) {
+    onProgress(completed, total);
     return ImageCacheDownloadResult(
-      total: urls.length,
+      total: total,
       completed: completed,
       failed: failed,
-      cancelled: shouldCancel() && completed < urls.length,
+      cancelled: shouldCancel() && completed < total,
     );
   }
 
