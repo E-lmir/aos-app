@@ -1,14 +1,11 @@
 import 'api_client.dart';
 
-class BuilderUnitTypeGroup {
-  const BuilderUnitTypeGroup(this.title, this.items);
+export 'models/builder_unit_type_group.dart';
 
-  final String title;
-  final List<JsonMap> items;
-}
+import 'models/builder_unit_type_group.dart';
 
 List<BuilderUnitTypeGroup> groupBuilderUnitsByType(List<JsonMap> items) {
-  const categories = [
+  const categories = <(String, String, bool)>[
     ('Hero', 'Hero', true),
     ('Infantry', 'Infantry', false),
     ('Cavalry', 'Cavalry', false),
@@ -22,33 +19,43 @@ List<BuilderUnitTypeGroup> groupBuilderUnitsByType(List<JsonMap> items) {
   final groups = <BuilderUnitTypeGroup>[];
 
   for (final (title, keyword, includeHeroes) in categories) {
-    final matches = items.where((item) {
-      final unit = _unitFromChoice(item);
-      final referenceKeywords = unit['referenceKeywords'];
-      if (referenceKeywords is! String) return false;
-      final keywords =
-          referenceKeywords.split(',').map((value) => value.trim()).toSet();
-      if (keyword == 'Manifestation') return keywords.contains(keyword);
-      if (keywords.contains('Manifestation')) return false;
-      if (!includeHeroes && keywords.contains('Hero')) return false;
-      return keywords.contains(keyword);
-    }).toList(growable: false);
-
-    if (matches.isNotEmpty) {
-      matches
-          .sort((left, right) => _unitName(left).compareTo(_unitName(right)));
-      groups.add(BuilderUnitTypeGroup(title, matches));
-      unmatched.removeAll(matches);
-    }
+    final matches = _matchingUnits(items, keyword, includeHeroes);
+    if (matches.isEmpty) continue;
+    groups.add(BuilderUnitTypeGroup(title, matches));
+    unmatched.removeAll(matches);
   }
 
-  if (unmatched.isNotEmpty) {
-    final others = unmatched.toList()
-      ..sort((left, right) => _unitName(left).compareTo(_unitName(right)));
-    groups.add(BuilderUnitTypeGroup('Other', others));
-  }
+  if (unmatched.isNotEmpty) groups.add(_otherUnits(unmatched));
   return groups;
 }
+
+List<JsonMap> _matchingUnits(
+  List<JsonMap> items,
+  String keyword,
+  bool includeHeroes,
+) {
+  final matches = items
+      .where((item) => _matchesCategory(item, keyword, includeHeroes))
+      .toList(growable: false);
+  return _sortByName(matches);
+}
+
+bool _matchesCategory(JsonMap choice, String keyword, bool includeHeroes) {
+  final referenceKeywords = _unitFromChoice(choice)['referenceKeywords'];
+  if (referenceKeywords is! String) return false;
+  final keywords =
+      referenceKeywords.split(',').map((value) => value.trim()).toSet();
+  if (keyword == 'Manifestation') return keywords.contains(keyword);
+  if (keywords.contains('Manifestation')) return false;
+  if (!includeHeroes && keywords.contains('Hero')) return false;
+  return keywords.contains(keyword);
+}
+
+BuilderUnitTypeGroup _otherUnits(Set<JsonMap> unmatched) =>
+    BuilderUnitTypeGroup('Other', _sortByName(unmatched.toList()));
+
+List<JsonMap> _sortByName(List<JsonMap> items) =>
+    items..sort((left, right) => _unitName(left).compareTo(_unitName(right)));
 
 JsonMap _unitFromChoice(JsonMap choice) {
   final unit = choice['unit'];
