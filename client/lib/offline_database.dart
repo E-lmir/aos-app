@@ -169,8 +169,6 @@ class OfflineDatabaseRepository {
   }
 
   JsonMap factions(String allianceId) {
-    final factions = <JsonMap>[];
-    final armiesOfRenown = <JsonMap>[];
     final rows = _rows('faction_keyword');
     final allianceName = rows
         .where((row) => row['id'] == allianceId)
@@ -179,7 +177,25 @@ class OfflineDatabaseRepository {
     final directFactions = rows
         .where((row) => row['parentFactionKeywordId'] == allianceId)
         .toList();
+    final grouped = _factionChildren(rows, directFactions, allianceName);
+    _sortByName(grouped.factions);
+    _sortByName(grouped.armiesOfRenown);
+    return {
+      'factions': grouped.factions,
+      'armies_of_renown': grouped.armiesOfRenown,
+    };
+  }
 
+  ({
+    List<JsonMap> factions,
+    List<JsonMap> armiesOfRenown,
+  }) _factionChildren(
+    List<JsonMap> rows,
+    List<JsonMap> directFactions,
+    String? allianceName,
+  ) {
+    final factions = <JsonMap>[];
+    final armiesOfRenown = <JsonMap>[];
     for (final faction in directFactions) {
       factions.add(faction);
       for (final child in rows.where(
@@ -196,9 +212,7 @@ class OfflineDatabaseRepository {
         }
       }
     }
-    _sortByName(factions);
-    _sortByName(armiesOfRenown);
-    return {'factions': factions, 'armies_of_renown': armiesOfRenown};
+    return (factions: factions, armiesOfRenown: armiesOfRenown);
   }
 
   List<JsonMap> heroes(
@@ -232,68 +246,142 @@ class OfflineDatabaseRepository {
     required String heroId,
     required String factionId,
     bool showLegends = false,
-  }) {
+  }) =>
+      _buildRegimentChoices(heroId, factionId, showLegends);
+
+  JsonMap _buildRegimentChoices(
+    String heroId,
+    String factionId,
+    bool showLegends,
+  ) {
     final factionUnits = _warscrollIds(factionId)
       ..addAll(_specialHeroIds(factionId));
-    final required = _rows('warscroll')
-        .where((unit) =>
-            unit['requiredPrimaryHeroWarscrollId'] == heroId &&
-            unit['isSpearhead'] != true &&
-            (showLegends || unit['isLegends'] != true))
-        .toList();
+    final required = _requiredRegimentUnits(heroId, showLegends);
     final requiredIds = required.map((unit) => unit['id']?.toString()).toSet();
     final scourgeIds = showLegends ? <String>{} : _scourgeWarscrollIds();
-    final options = _rows('warscroll_regiment_option').where((option) {
-      return option['warscrollId'] == heroId &&
-          (option['requiredRosterFactionKeywordId'] == null ||
-              option['requiredRosterFactionKeywordId'] == factionId);
-    }).toList();
-    final results = <JsonMap>[];
+    final options = _regimentOptions(heroId, factionId);
+    final items = _availableRegimentChoices(
+      factionId,
+      factionUnits,
+      requiredIds,
+      scourgeIds,
+      options,
+      showLegends,
+    );
+    return {'required_units': required, 'items': items};
+  }
 
+  List<JsonMap> _requiredRegimentUnits(String heroId, bool showLegends) =>
+      _rows('warscroll')
+          .where((unit) =>
+              unit['requiredPrimaryHeroWarscrollId'] == heroId &&
+              unit['isSpearhead'] != true &&
+              (showLegends || unit['isLegends'] != true))
+          .toList();
+
+  List<JsonMap> _regimentOptions(String heroId, String factionId) =>
+      _rows('warscroll_regiment_option').where((option) {
+        return option['warscrollId'] == heroId &&
+            (option['requiredRosterFactionKeywordId'] == null ||
+                option['requiredRosterFactionKeywordId'] == factionId);
+      }).toList();
+
+  List<JsonMap> _availableRegimentChoices(
+    String factionId,
+    Set<String> factionUnits,
+    Set<String?> requiredIds,
+    Set<String> scourgeIds,
+    List<JsonMap> options,
+    bool showLegends,
+  ) {
+    final results = <JsonMap>[];
     for (final unit in _rows('warscroll')) {
       final unitId = unit['id']?.toString();
       if (unitId == null ||
-          !factionUnits.contains(unitId) ||
-          requiredIds.contains(unitId) ||
-          scourgeIds.contains(unitId) ||
-          unit['isSpearhead'] == true ||
-          (!showLegends && unit['isLegends'] == true) ||
-          _hasReferenceKeyword(unit, 'Faction Terrain') ||
-          _hasReferenceKeyword(unit, 'Manifestation') ||
-          _isExcludedCityAuxiliary(factionId, unitId)) {
+          !_isAvailableRegimentUnit(
+            unit,
+            unitId,
+            factionId,
+            factionUnits,
+            requiredIds,
+            scourgeIds,
+            showLegends,
+          )) {
         continue;
       }
-      for (final option in options) {
-        final quantity = option['childQuantity'];
-        if (!const ['any', 'one', 'zeroToOne'].contains(quantity)) continue;
-        final requiredFactionId = option['requiredFactionKeywordId'];
-        if (requiredFactionId != null &&
-            requiredFactionId != factionId &&
-            !_hasReferenceKeywordById(unit, requiredFactionId.toString())) {
-          continue;
-        }
-        final requiredWarscrollId = option['requiredWarscrollId'];
-        if (requiredWarscrollId != null && requiredWarscrollId != unitId) {
-          continue;
-        }
-        final optionId = option['id']?.toString();
-        if (optionId == null || !_matchesOptionKeywords(unitId, optionId)) {
-          continue;
-        }
-        results.add({
-          'unit': unit,
-          'only_one': quantity != 'any',
-          'option_id': quantity == 'any' ? null : optionId,
-        });
-        break;
-      }
+      final choice = _regimentChoice(unit, unitId, factionId, options);
+      if (choice != null) results.add(choice);
     }
-    results.sort((left, right) {
+    return _sortRegimentChoices(results);
+  }
+
+  bool _isAvailableRegimentUnit(
+    JsonMap unit,
+    String unitId,
+    String factionId,
+    Set<String> factionUnits,
+    Set<String?> requiredIds,
+    Set<String> scourgeIds,
+    bool showLegends,
+  ) =>
+      factionUnits.contains(unitId) &&
+      !requiredIds.contains(unitId) &&
+      !scourgeIds.contains(unitId) &&
+      unit['isSpearhead'] != true &&
+      (showLegends || unit['isLegends'] != true) &&
+      !_hasReferenceKeyword(unit, 'Faction Terrain') &&
+      !_hasReferenceKeyword(unit, 'Manifestation') &&
+      !_isExcludedCityAuxiliary(factionId, unitId);
+
+  JsonMap? _regimentChoice(
+    JsonMap unit,
+    String unitId,
+    String factionId,
+    List<JsonMap> options,
+  ) {
+    for (final option in options) {
+      if (!_optionAllowsUnit(option, unit, unitId, factionId)) continue;
+      final quantity = option['childQuantity'];
+      final optionId = option['id']?.toString();
+      return {
+        'unit': unit,
+        'only_one': quantity != 'any',
+        'option_id': quantity == 'any' ? null : optionId,
+      };
+    }
+    return null;
+  }
+
+  bool _optionAllowsUnit(
+    JsonMap option,
+    JsonMap unit,
+    String unitId,
+    String factionId,
+  ) {
+    if (!const ['any', 'one', 'zeroToOne'].contains(option['childQuantity'])) {
+      return false;
+    }
+    final requiredFactionId = option['requiredFactionKeywordId'];
+    if (requiredFactionId != null &&
+        requiredFactionId != factionId &&
+        !_hasReferenceKeywordById(unit, requiredFactionId.toString())) {
+      return false;
+    }
+    final requiredWarscrollId = option['requiredWarscrollId'];
+    if (requiredWarscrollId != null && requiredWarscrollId != unitId) {
+      return false;
+    }
+    final optionId = option['id']?.toString();
+    return optionId != null && _matchesOptionKeywords(unitId, optionId);
+  }
+
+  List<JsonMap> _sortRegimentChoices(List<JsonMap> choices) {
+    choices.sort((left, right) {
       final leftName = (left['unit'] as JsonMap)['name']?.toString() ?? '';
       final rightName = (right['unit'] as JsonMap)['name']?.toString() ?? '';
       return leftName.toLowerCase().compareTo(rightName.toLowerCase());
     });
-    return {'required_units': required, 'items': results};
+    return choices;
   }
 
   JsonMap warscrollDetails(String warscrollId) {
@@ -301,103 +389,236 @@ class OfflineDatabaseRepository {
         _rows('warscroll').where((row) => row['id'] == warscrollId).firstOrNull;
     if (unit == null) throw StateError('Warscroll was not found.');
 
-    final abilities = _rows('warscroll_ability')
-        .where((ability) => ability['warscrollId'] == warscrollId)
-        .map((ability) => {
-              ...ability,
-              'keywords': _rows('warscroll_ability_keyword')
-                  .where((link) => link['warscrollAbilityId'] == ability['id'])
-                  .map((link) => _keyword(link['keywordId']))
-                  .whereType<JsonMap>()
-                  .toList(),
-            })
-        .toList();
+    return {
+      'unit': unit,
+      'abilities': _warscrollAbilities(warscrollId),
+      'weapons': _warscrollWeapons(warscrollId),
+      'additional_characteristics': _additionalCharacteristics(warscrollId),
+      'regiment_options': _warscrollRegimentOptions(warscrollId),
+    };
+  }
+
+  List<JsonMap> _warscrollAbilities(String warscrollId) =>
+      _rows('warscroll_ability')
+          .where((ability) => ability['warscrollId'] == warscrollId)
+          .map((ability) => {
+                ...ability,
+                'keywords': _rows('warscroll_ability_keyword')
+                    .where(
+                        (link) => link['warscrollAbilityId'] == ability['id'])
+                    .map((link) => _keyword(link['keywordId']))
+                    .whereType<JsonMap>()
+                    .toList(),
+              })
+          .toList();
+
+  List<JsonMap> _warscrollWeapons(String warscrollId) {
     final weapons = _rows('warscroll_weapon')
         .where((weapon) => weapon['warscrollId'] == warscrollId)
         .map((weapon) => {
               ...weapon,
-              'abilities': _deduplicateWeaponAbilities(
-                _rows('warscroll_weapon_weapon_ability')
-                    .where(
-                        (link) => link['warscrollWeaponId'] == weapon['id'])
-                    .expand(
-                      (link) => _weaponAbilityIds(link['weaponAbilityId']),
-                    )
-                    .map((abilityId) => _rows('weapon_ability')
-                        .where((ability) => ability['id'] == abilityId)
-                        .firstOrNull)
-                    .whereType<JsonMap>(),
-              ),
+              'abilities': _weaponAbilities(weapon['id']),
             })
         .toList();
-    weapons.sort((left, right) {
-      int typeOrder(JsonMap weapon) => switch (weapon['type']?.toString()) {
-            'ranged' => 0,
-            'melee' => 1,
-            _ => 2,
-          };
-
-      final type = typeOrder(left).compareTo(typeOrder(right));
-      if (type != 0) return type;
-      return (left['name']?.toString() ?? '')
-          .compareTo(right['name']?.toString() ?? '');
-    });
-    final additionalCharacteristics =
-        _rows('warscroll_additional_characteristic')
-            .where((item) => item['warscrollId'] == warscrollId)
-            .toList();
-    final options = _rows('warscroll_regiment_option')
-        .where((item) =>
-            item['warscrollId'] == warscrollId &&
-            item['hiddenFromReference'] != true)
-        .map((option) => {
-              ...option,
-              'required_keywords': _optionKeywords(
-                'warscroll_regiment_option_required_keyword',
-                option['id'],
-              ),
-              'excluded_keywords': _optionKeywords(
-                'warscroll_regiment_option_excluded_keyword',
-                option['id'],
-              ),
-            })
-        .toList()
-      ..sort((left, right) => ((left['displayOrder'] as num?)?.toInt() ?? 0)
-          .compareTo((right['displayOrder'] as num?)?.toInt() ?? 0));
-
-    return {
-      'unit': unit,
-      'abilities': abilities,
-      'weapons': weapons,
-      'additional_characteristics': additionalCharacteristics,
-      'regiment_options': options,
-    };
+    weapons.sort(_compareWeapons);
+    return weapons;
   }
+
+  List<JsonMap> _weaponAbilities(Object? weaponId) {
+    final links = _rows('warscroll_weapon_weapon_ability')
+        .where((link) => link['warscrollWeaponId'] == weaponId);
+    final ids =
+        links.expand((link) => _weaponAbilityIds(link['weaponAbilityId']));
+    final abilities = ids
+        .map((id) => _rows('weapon_ability')
+            .where((ability) => ability['id'] == id)
+            .firstOrNull)
+        .whereType<JsonMap>();
+    return _deduplicateWeaponAbilities(abilities);
+  }
+
+  int _compareWeapons(JsonMap left, JsonMap right) {
+    int typeOrder(JsonMap weapon) => switch (weapon['type']?.toString()) {
+          'ranged' => 0,
+          'melee' => 1,
+          _ => 2,
+        };
+    final type = typeOrder(left).compareTo(typeOrder(right));
+    if (type != 0) return type;
+    return (left['name']?.toString() ?? '')
+        .compareTo(right['name']?.toString() ?? '');
+  }
+
+  List<JsonMap> _additionalCharacteristics(String warscrollId) =>
+      _rows('warscroll_additional_characteristic')
+          .where((item) => item['warscrollId'] == warscrollId)
+          .toList();
+
+  List<JsonMap> _warscrollRegimentOptions(String warscrollId) =>
+      _rows('warscroll_regiment_option')
+          .where((item) =>
+              item['warscrollId'] == warscrollId &&
+              item['hiddenFromReference'] != true)
+          .map((option) => {
+                ...option,
+                'required_keywords': _optionKeywords(
+                  'warscroll_regiment_option_required_keyword',
+                  option['id'],
+                ),
+                'excluded_keywords': _optionKeywords(
+                  'warscroll_regiment_option_excluded_keyword',
+                  option['id'],
+                ),
+              })
+          .toList()
+        ..sort((left, right) => ((left['displayOrder'] as num?)?.toInt() ?? 0)
+            .compareTo((right['displayOrder'] as num?)?.toInt() ?? 0));
 
   JsonMap configuration(String factionId) {
     final excludedPublications = _scourgePublicationIds();
-    final factionLores = _rows('lore').where((lore) =>
-        lore['factionId'] == factionId &&
-        !_isScourge(lore, excludedPublications));
+    final lores = _configurationLores(factionId, excludedPublications);
+    final excludedGroups = _scourgeAbilityGroupIds(excludedPublications);
+    final battleTraits = _battleTraits(factionId, excludedGroups);
+    final enhancements = _enhancementCollections(factionId, excludedGroups);
+    final terrain = _factionTerrain(factionId);
+    final formations = _battleFormations(factionId, excludedPublications);
+    final regimentsOfRenown = _regimentsOfRenown(factionId);
+    _sortFactionConfigurationRows(
+      lores,
+      terrain,
+      formations,
+      regimentsOfRenown,
+      battleTraits,
+      enhancements,
+    );
+    return _configurationResult(
+      lores,
+      battleTraits,
+      enhancements,
+      terrain,
+      formations,
+      regimentsOfRenown,
+    );
+  }
+
+  void _sortFactionConfigurationRows(
+    ({
+      List<JsonMap> spells,
+      List<JsonMap> prayers,
+      List<JsonMap> manifestations,
+    }) lores,
+    List<JsonMap> terrain,
+    List<JsonMap> formations,
+    List<JsonMap> regimentsOfRenown,
+    List<JsonMap> battleTraits,
+    ({
+      List<JsonMap> artefacts,
+      List<JsonMap> traits,
+      List<JsonMap> other,
+    }) enhancements,
+  ) {
+    _sortConfigurationRows([
+      lores.spells,
+      lores.prayers,
+      lores.manifestations,
+      terrain,
+      formations,
+      regimentsOfRenown,
+      battleTraits,
+      enhancements.artefacts,
+      enhancements.traits,
+      enhancements.other,
+    ]);
+  }
+
+  JsonMap _configurationResult(
+    ({
+      List<JsonMap> spells,
+      List<JsonMap> prayers,
+      List<JsonMap> manifestations,
+    }) lores,
+    List<JsonMap> battleTraits,
+    ({
+      List<JsonMap> artefacts,
+      List<JsonMap> traits,
+      List<JsonMap> other,
+    }) enhancements,
+    List<JsonMap> terrain,
+    List<JsonMap> formations,
+    List<JsonMap> regimentsOfRenown,
+  ) =>
+      {
+        'battle_traits': battleTraits,
+        'battle_formations': formations,
+        'spell_lores': lores.spells,
+        'prayer_lores': lores.prayers,
+        'manifestation_lores': lores.manifestations,
+        'regiments_of_renown': regimentsOfRenown,
+        'terrain': terrain,
+        'enhancements': {
+          'artefacts': enhancements.artefacts,
+          'heroic_traits': enhancements.traits,
+          'other': enhancements.other,
+        },
+      };
+
+  ({
+    List<JsonMap> spells,
+    List<JsonMap> prayers,
+    List<JsonMap> manifestations,
+  }) _configurationLores(
+    String factionId,
+    Set<String> excludedPublications,
+  ) {
     final spells = <JsonMap>[];
     final prayers = <JsonMap>[];
     final manifestations = _rows('lore')
         .where((lore) => lore['factionId'] == null)
         .map((lore) => _loreWithAbilities(lore, includeWarscrolls: true))
         .toList();
-
+    final factionLores = _rows('lore').where((lore) =>
+        lore['factionId'] == factionId &&
+        !_isScourge(lore, excludedPublications));
     for (final lore in factionLores) {
-      final name = lore['name']?.toString() ?? '';
-      if (_containsAny(name, const ['Lore of', 'Spell Lore', 'Arcane']) &&
-          !_containsAny(name, const [
-            'Lore of the Abyss',
-            'Lore of Virulence',
-            'Lore of the Spirit-Song',
-            'Lore of the Everwinter',
-            "Brodd's Bellows",
-          ])) {
-        spells.add(_loreWithAbilities(lore));
-      } else if (_containsAny(name, const [
+      _appendFactionLore(lore, spells, prayers, manifestations);
+    }
+    return (
+      spells: spells,
+      prayers: prayers,
+      manifestations: manifestations,
+    );
+  }
+
+  void _appendFactionLore(
+    JsonMap lore,
+    List<JsonMap> spells,
+    List<JsonMap> prayers,
+    List<JsonMap> manifestations,
+  ) {
+    final name = lore['name']?.toString() ?? '';
+    if (_isSpellLore(name)) {
+      spells.add(_loreWithAbilities(lore));
+    } else if (_isPrayerLore(name)) {
+      prayers.add(_loreWithAbilities(lore));
+    } else {
+      manifestations.insert(
+        0,
+        _loreWithAbilities(lore, includeWarscrolls: true),
+      );
+    }
+  }
+
+  bool _isSpellLore(String name) =>
+      _containsAny(name, const ['Lore of', 'Spell Lore', 'Arcane']) &&
+      !_containsAny(name, const [
+        'Lore of the Abyss',
+        'Lore of Virulence',
+        'Lore of the Spirit-Song',
+        'Lore of the Everwinter',
+        "Brodd's Bellows",
+      ]);
+
+  bool _isPrayerLore(String name) => _containsAny(name, const [
         'Prayer',
         'Bless',
         'Rites',
@@ -410,17 +631,9 @@ class OfflineDatabaseRepository {
         'Proclamations',
         'Lore of the Everwinter',
         "Brodd's Bellows",
-      ])) {
-        prayers.add(_loreWithAbilities(lore));
-      } else {
-        manifestations.insert(
-          0,
-          _loreWithAbilities(lore, includeWarscrolls: true),
-        );
-      }
-    }
+      ]);
 
-    final excludedGroups = _scourgeAbilityGroupIds(excludedPublications);
+  List<JsonMap> _battleTraits(String factionId, Set<String> excludedGroups) {
     final battleTraits = _rows('ability_group')
         .where((group) =>
             group['factionId'] == factionId &&
@@ -438,6 +651,14 @@ class OfflineDatabaseRepository {
     if (battleTraits.length > 1) {
       battleTraits.removeWhere((group) => group['restrictionText'] == null);
     }
+    return battleTraits;
+  }
+
+  ({
+    List<JsonMap> artefacts,
+    List<JsonMap> traits,
+    List<JsonMap> other,
+  }) _enhancementCollections(String factionId, Set<String> excludedGroups) {
     final groups = _rows('ability_group').where((group) =>
         group['factionId'] == factionId &&
         !excludedGroups.contains(group['id']));
@@ -445,42 +666,64 @@ class OfflineDatabaseRepository {
     final traits = <JsonMap>[];
     final other = <JsonMap>[];
     for (final group in groups) {
-      final groupAbilities = _rows('ability')
-          .where((ability) => ability['abilityGroupId'] == group['id'])
-          .map(_abilityWithKeywords)
-          .toList();
-      switch (group['abilityGroupType']) {
-        case 'artefactsOfPower':
-          artefacts.addAll(groupAbilities);
-          break;
-        case 'heroicTraits':
-          traits.addAll(groupAbilities);
-          break;
-        case 'otherEnhancements':
-          other.add({
-            ...group,
-            'abilities': groupAbilities,
-            'required_keywords': _abilityGroupKeywordNames(
-              'ability_group_required_keyword',
-              group['id']?.toString(),
-            ),
-            'excluded_keywords': _abilityGroupKeywordNames(
-              'ability_group_excluded_keyword',
-              group['id']?.toString(),
-            ),
-            'required_warscroll_ids': _rows(
-              'ability_group_required_warscroll',
-            )
-                .where((link) => link['abilityGroupId'] == group['id'])
-                .map((link) => link['warscrollId']?.toString())
-                .whereType<String>()
-                .toList(),
-          });
-          break;
-      }
+      _appendEnhancementGroup(group, artefacts, traits, other);
     }
+    return (artefacts: artefacts, traits: traits, other: other);
+  }
+
+  void _appendEnhancementGroup(
+    JsonMap group,
+    List<JsonMap> artefacts,
+    List<JsonMap> traits,
+    List<JsonMap> other,
+  ) {
+    final abilities = _groupAbilitiesWithKeywords(group['id']);
+    switch (group['abilityGroupType']) {
+      case 'artefactsOfPower':
+        artefacts.addAll(abilities);
+        break;
+      case 'heroicTraits':
+        traits.addAll(abilities);
+        break;
+      case 'otherEnhancements':
+        other.add(_otherEnhancementGroup(group, abilities));
+        break;
+    }
+  }
+
+  List<JsonMap> _groupAbilitiesWithKeywords(Object? groupId) => _rows('ability')
+      .where((ability) => ability['abilityGroupId'] == groupId)
+      .map(_abilityWithKeywords)
+      .toList();
+
+  JsonMap _otherEnhancementGroup(
+    JsonMap group,
+    List<JsonMap> abilities,
+  ) =>
+      {
+        ...group,
+        'abilities': abilities,
+        'required_keywords': _abilityGroupKeywordNames(
+          'ability_group_required_keyword',
+          group['id']?.toString(),
+        ),
+        'excluded_keywords': _abilityGroupKeywordNames(
+          'ability_group_excluded_keyword',
+          group['id']?.toString(),
+        ),
+        'required_warscroll_ids': _requiredEnhancementWarscrollIds(group['id']),
+      };
+
+  List<String> _requiredEnhancementWarscrollIds(Object? groupId) =>
+      _rows('ability_group_required_warscroll')
+          .where((link) => link['abilityGroupId'] == groupId)
+          .map((link) => link['warscrollId']?.toString())
+          .whereType<String>()
+          .toList();
+
+  List<JsonMap> _factionTerrain(String factionId) {
     final linkedWarscrolls = _warscrollIds(factionId);
-    final terrain = _rows('warscroll')
+    return _rows('warscroll')
         .where((unit) =>
             linkedWarscrolls.contains(unit['id']) &&
             unit['isSpearhead'] != true &&
@@ -488,73 +731,66 @@ class OfflineDatabaseRepository {
             (unit['referenceKeywords']?.toString().contains('Terrain') ??
                 false))
         .toList();
-    final formations = _rows('battle_formation')
-        .where((formation) =>
-            formation['factionId'] == factionId &&
-            !_isScourge(formation, excludedPublications))
-        .map((formation) => {
-              ..._withPublicationBackgroundImage(formation),
-              'abilities': _rows('battle_formation_rule')
-                  .where((rule) => rule['battleFormationId'] == formation['id'])
-                  .toList(),
-            })
+  }
+
+  List<JsonMap> _battleFormations(
+    String factionId,
+    Set<String> excludedPublications,
+  ) =>
+      _rows('battle_formation')
+          .where((formation) =>
+              formation['factionId'] == factionId &&
+              !_isScourge(formation, excludedPublications))
+          .map((formation) => {
+                ..._withPublicationBackgroundImage(formation),
+                'abilities': _rows('battle_formation_rule')
+                    .where(
+                        (rule) => rule['battleFormationId'] == formation['id'])
+                    .toList(),
+              })
+          .toList();
+
+  List<JsonMap> _regimentsOfRenown(String factionId) {
+    final permittedRegimentIds = _permittedRegimentIds(factionId);
+    return _rows('ability_group')
+        .where((group) =>
+            group['abilityGroupType'] == 'regimentOfRenown' &&
+            group['isLegends'] != true &&
+            permittedRegimentIds.contains(group['id']))
+        .map(_regimentOfRenownDetails)
         .toList();
-    final permittedRegimentIds = _rows(
+  }
+
+  Set<Object?> _permittedRegimentIds(String factionId) => _rows(
       'ability_group_regiment_of_renown_permitted_faction_keyword',
     )
         .where((link) => link['factionKeywordId'] == factionId)
         .map((link) => link['abilityGroupId'])
         .toSet();
-    final regimentsOfRenown = _rows('ability_group')
-        .where((group) =>
-            group['abilityGroupType'] == 'regimentOfRenown' &&
-            group['isLegends'] != true &&
-            permittedRegimentIds.contains(group['id']))
-        .map((group) => {
-              ...group,
-              'abilities': _abilityGroupAbilities(group['id']),
-              'units':
-                  _rows('ability_group_regiment_of_renown_linked_warscroll')
-                      .where((link) => link['abilityGroupId'] == group['id'])
-                      .map((link) {
-                final warscroll = _rows('warscroll')
-                    .where((unit) => unit['id'] == link['warscrollId'])
-                    .firstOrNull;
-                return {
-                  ...link,
-                  if (warscroll != null) 'warscroll': warscroll,
-                };
-              }).toList(),
-            })
-        .toList();
-    for (final rows in [
-      spells,
-      prayers,
-      manifestations,
-      terrain,
-      formations,
-      regimentsOfRenown,
-      battleTraits,
-      artefacts,
-      traits,
-      other,
-    ]) {
+
+  JsonMap _regimentOfRenownDetails(JsonMap group) => {
+        ...group,
+        'abilities': _abilityGroupAbilities(group['id']),
+        'units': _linkedRegimentWarscrolls(group['id']),
+      };
+
+  List<JsonMap> _linkedRegimentWarscrolls(Object? groupId) =>
+      _rows('ability_group_regiment_of_renown_linked_warscroll')
+          .where((link) => link['abilityGroupId'] == groupId)
+          .map(_regimentWarscrollLink)
+          .toList();
+
+  JsonMap _regimentWarscrollLink(JsonMap link) {
+    final warscroll = _rows('warscroll')
+        .where((unit) => unit['id'] == link['warscrollId'])
+        .firstOrNull;
+    return {...link, if (warscroll != null) 'warscroll': warscroll};
+  }
+
+  void _sortConfigurationRows(List<List<JsonMap>> collections) {
+    for (final rows in collections) {
       _sortByName(rows);
     }
-    return {
-      'battle_traits': battleTraits,
-      'battle_formations': formations,
-      'spell_lores': spells,
-      'prayer_lores': prayers,
-      'manifestation_lores': manifestations,
-      'regiments_of_renown': regimentsOfRenown,
-      'terrain': terrain,
-      'enhancements': {
-        'artefacts': artefacts,
-        'heroic_traits': traits,
-        'other': other,
-      },
-    };
   }
 
   List<JsonMap> auxiliaryUnits(String factionId, {bool showLegends = false}) {
@@ -588,78 +824,108 @@ class OfflineDatabaseRepository {
   }
 
   JsonMap rulesCatalog() {
-    List<JsonMap> project(String table, List<String> fields) {
-      return _rows(table)
-          .map((row) => {
-                for (final field in fields)
-                  if (row.containsKey(field)) field: row[field],
-              })
-          .toList();
-    }
+    final catalog = _rulesCatalogBase();
+    final regiments = _ruleCatalogRegiments();
+    final regimentLinks = _ruleCatalogRegimentLinks(regiments);
+    final manifestationLores = _manifestationLores();
+    final manifestationAbilities = _manifestationAbilities(manifestationLores);
+    final manifestationLinks = _manifestationLinks(manifestationAbilities);
+    return {
+      ...catalog,
+      'regimentsOfRenown': regiments,
+      'regimentLinks': regimentLinks,
+      'manifestationLores': manifestationLores,
+      'manifestationAbilities': manifestationAbilities,
+      'manifestationLinks': manifestationLinks,
+      'warscrolls': _ruleCatalogWarscrolls(regimentLinks, manifestationLinks),
+    };
+  }
 
-    final publications = project('publication', [
-      'id',
-      'name',
-      'backgroundImage',
-      'factionKeywordId',
-      'hiddenFromSearch',
-    ]);
-    final publicationGroups = project('publication_group', [
-      'id',
-      'name',
-      'displayOrder',
-      'parentPublicationGroupId',
-    ]);
-    final publicationGroupLinks = _rows('publication_publication_group');
-    final factions = project('faction_keyword', [
-      'id',
-      'name',
-      'parentFactionKeywordId',
-      'armyOfRenown',
-      'isLegends',
-      'factionHeaderImage',
-    ]);
-    final sections = project('rule_section', [
-      'id',
-      'name',
-      'displayOrder',
-      'publicationId',
-      'parentId',
-    ]);
-    final regiments = _rows('ability_group')
-        .where((group) =>
-            group['abilityGroupType'] == 'regimentOfRenown' &&
-            group['isLegends'] != true)
-        .map((group) => {
-              for (final field in [
-                'id',
-                'name',
-                'image',
-                'regimentOfRenownPointsCost',
-                'regimentOfRenownRowImageWarscrollId',
-                'subsectionLore',
-                'subsectionRulesText',
-              ])
-                if (group.containsKey(field)) field: group[field],
-              'abilities': _abilityGroupAbilities(group['id']),
-            })
-        .toList();
+  JsonMap _rulesCatalogBase() {
+    return {
+      'publications': _catalogPublications(),
+      'publicationGroups': _catalogPublicationGroups(),
+      'publicationGroupLinks': _rows('publication_publication_group'),
+      'factions': _catalogFactions(),
+      'sections': _catalogSections(),
+    };
+  }
+
+  List<JsonMap> _catalogPublications() => _projectRows('publication', [
+        'id',
+        'name',
+        'backgroundImage',
+        'factionKeywordId',
+        'hiddenFromSearch',
+      ]);
+
+  List<JsonMap> _catalogPublicationGroups() => _projectRows(
+        'publication_group',
+        ['id', 'name', 'displayOrder', 'parentPublicationGroupId'],
+      );
+
+  List<JsonMap> _catalogFactions() => _projectRows('faction_keyword', [
+        'id',
+        'name',
+        'parentFactionKeywordId',
+        'armyOfRenown',
+        'isLegends',
+        'factionHeaderImage',
+      ]);
+
+  List<JsonMap> _catalogSections() => _projectRows(
+        'rule_section',
+        ['id', 'name', 'displayOrder', 'publicationId', 'parentId'],
+      );
+
+  List<JsonMap> _projectRows(String table, List<String> fields) => _rows(table)
+      .map((row) => {
+            for (final field in fields)
+              if (row.containsKey(field)) field: row[field],
+          })
+      .toList();
+
+  List<JsonMap> _ruleCatalogRegiments() => _rows('ability_group')
+      .where((group) =>
+          group['abilityGroupType'] == 'regimentOfRenown' &&
+          group['isLegends'] != true)
+      .map((group) => {
+            for (final field in [
+              'id',
+              'name',
+              'image',
+              'regimentOfRenownPointsCost',
+              'regimentOfRenownRowImageWarscrollId',
+              'subsectionLore',
+              'subsectionRulesText',
+            ])
+              if (group.containsKey(field)) field: group[field],
+            'abilities': _abilityGroupAbilities(group['id']),
+          })
+      .toList();
+
+  List<JsonMap> _ruleCatalogRegimentLinks(List<JsonMap> regiments) {
     final regimentIds = regiments.map((group) => group['id']).toSet();
-    final regimentLinks = project(
+    return _projectRows(
       'ability_group_regiment_of_renown_linked_warscroll',
       ['abilityGroupId', 'warscrollId', 'minCount', 'maxCount'],
     ).where((link) => regimentIds.contains(link['abilityGroupId'])).toList();
-    final manifestationLores = project('lore', [
-      'id',
-      'name',
-      'publicationId',
-      'factionId',
-      'points',
-    ])
-        .where((lore) => lore['publicationId'] == _manifestationsPublicationId)
-        .toList();
-    final loreIds = manifestationLores.map((lore) => lore['id']).toSet();
-    final manifestationAbilities = project('lore_ability', [
+  }
+
+  List<JsonMap> _manifestationLores() => _projectRows('lore', [
+        'id',
+        'name',
+        'publicationId',
+        'factionId',
+        'points',
+      ])
+          .where(
+              (lore) => lore['publicationId'] == _manifestationsPublicationId)
+          .toList();
+
+  List<JsonMap> _manifestationAbilities(List<JsonMap> lores) {
+    final loreIds = lores.map((lore) => lore['id']).toSet();
+    return _projectRows('lore_ability', [
       'id',
       'loreId',
       'name',
@@ -673,53 +939,50 @@ class OfflineDatabaseRepository {
       'additionalRulesText',
       'rules',
     ]).where((ability) => loreIds.contains(ability['loreId'])).toList();
-    final abilityIds =
-        manifestationAbilities.map((ability) => ability['id']).toSet();
-    final manifestationLinks = project(
+  }
+
+  List<JsonMap> _manifestationLinks(List<JsonMap> abilities) {
+    final abilityIds = abilities.map((ability) => ability['id']).toSet();
+    return _projectRows(
       'lore_ability_linked_warscroll',
       ['loreAbilityId', 'warscrollId'],
     ).where((link) => abilityIds.contains(link['loreAbilityId'])).toList();
+  }
+
+  List<JsonMap> _ruleCatalogWarscrolls(
+    List<JsonMap> regimentLinks,
+    List<JsonMap> manifestationLinks,
+  ) {
     final warscrollIds = {
       ...regimentLinks.map((link) => link['warscrollId']),
       ...manifestationLinks.map((link) => link['warscrollId']),
     };
-    final warscrolls = _rows('warscroll')
+    return _rows('warscroll')
         .where((warscroll) =>
             warscroll['isLegends'] == true ||
             warscrollIds.contains(warscroll['id']))
-        .map((warscroll) => {
-              for (final field in [
-                'id',
-                'name',
-                'points',
-                'rowImage',
-                'bannerImage',
-                'referenceKeywords',
-                'isLegends',
-                'modelCount',
-                'baseSize',
-                'subsectionLore',
-                'subsectionRulesText',
-                'lore',
-                'regimentOfRenownPointsCost',
-              ])
-                if (warscroll.containsKey(field)) field: warscroll[field],
-            })
+        .map(_projectRuleCatalogWarscroll)
         .toList();
-    return {
-      'publications': publications,
-      'publicationGroups': publicationGroups,
-      'publicationGroupLinks': publicationGroupLinks,
-      'factions': factions,
-      'sections': sections,
-      'regimentsOfRenown': regiments,
-      'regimentLinks': regimentLinks,
-      'manifestationLores': manifestationLores,
-      'manifestationAbilities': manifestationAbilities,
-      'manifestationLinks': manifestationLinks,
-      'warscrolls': warscrolls,
-    };
   }
+
+  JsonMap _projectRuleCatalogWarscroll(JsonMap warscroll) => {
+        for (final field in const [
+          'id',
+          'name',
+          'points',
+          'rowImage',
+          'bannerImage',
+          'referenceKeywords',
+          'isLegends',
+          'modelCount',
+          'baseSize',
+          'subsectionLore',
+          'subsectionRulesText',
+          'lore',
+          'regimentOfRenownPointsCost',
+        ])
+          if (warscroll.containsKey(field)) field: warscroll[field],
+      };
 
   JsonMap rulesSection(String sectionId) {
     final rules = _rows('rule_container')
@@ -735,77 +998,108 @@ class OfflineDatabaseRepository {
   }
 
   List<JsonMap> rulesFactionWarscrolls(String factionId) {
+    final faction = _findFaction(factionId);
+    final warscrolls = _eligibleFactionWarscrolls(faction, factionId);
+    _sortByName(warscrolls);
+    return warscrolls;
+  }
+
+  JsonMap _findFaction(String factionId) {
     final faction = _rows('faction_keyword')
         .where((row) => row['id'] == factionId)
         .firstOrNull;
     if (faction == null) {
       throw StateError('Faction was not found.');
     }
+    return faction;
+  }
+
+  List<JsonMap> _eligibleFactionWarscrolls(
+    JsonMap faction,
+    String factionId,
+  ) {
     final warscrollIds = _warscrollIds(factionId);
     final scourgeIds =
         faction['isLegends'] == true ? <String>{} : _scourgeWarscrollIds();
-    final warscrolls = _rows('warscroll')
-        .where((warscroll) {
-          final id = warscroll['id']?.toString();
-          return id != null &&
-              warscrollIds.contains(id) &&
-              warscroll['isSpearhead'] != true &&
-              (faction['isLegends'] == true ||
-                  warscroll['isLegends'] != true) &&
-              !scourgeIds.contains(id);
-        })
-        .map((warscroll) => {
-              for (final field in const [
-                'id',
-                'name',
-                'points',
-                'rowImage',
-                'bannerImage',
-                'referenceKeywords',
-                'isLegends',
-                'modelCount',
-                'baseSize',
-              ])
-                if (warscroll.containsKey(field)) field: warscroll[field],
-            })
+    return _rows('warscroll')
+        .where((warscroll) =>
+            _isFactionWarscroll(warscroll, faction, warscrollIds, scourgeIds))
+        .map(_projectFactionWarscroll)
         .toList();
-    _sortByName(warscrolls);
-    return warscrolls;
   }
+
+  bool _isFactionWarscroll(
+    JsonMap warscroll,
+    JsonMap faction,
+    Set<String> warscrollIds,
+    Set<String> scourgeIds,
+  ) {
+    final id = warscroll['id']?.toString();
+    return id != null &&
+        warscrollIds.contains(id) &&
+        warscroll['isSpearhead'] != true &&
+        (faction['isLegends'] == true || warscroll['isLegends'] != true) &&
+        !scourgeIds.contains(id);
+  }
+
+  JsonMap _projectFactionWarscroll(JsonMap warscroll) => {
+        for (final field in const [
+          'id',
+          'name',
+          'points',
+          'rowImage',
+          'bannerImage',
+          'referenceKeywords',
+          'isLegends',
+          'modelCount',
+          'baseSize',
+        ])
+          if (warscroll.containsKey(field)) field: warscroll[field],
+      };
 
   JsonMap _loreWithAbilities(
     JsonMap lore, {
     bool includeWarscrolls = false,
   }) {
-    final abilities = _rows('lore_ability')
-        .where((item) => item['loreId'] == lore['id'])
-        .map(_loreAbilityWithKeywords)
-        .toList();
+    final abilities = _loreAbilities(lore);
     if (!includeWarscrolls) {
       return {
         ..._withPublicationBackgroundImage(lore),
         'abilities': abilities,
       };
     }
-    final abilityIds = abilities.map((item) => item['id']).toSet();
-    final warscrolls = _rows('lore_ability_linked_warscroll')
-        .where((link) => abilityIds.contains(link['loreAbilityId']))
-        .map((link) {
-          final summonAbility = abilities
-              .where((ability) => ability['id'] == link['loreAbilityId'])
-              .firstOrNull;
-          final warscroll = _rows('warscroll')
-              .where((unit) => unit['id'] == link['warscrollId'])
-              .firstOrNull;
-          if (summonAbility == null || warscroll == null) return null;
-          return {...warscroll, 'summonAbility': summonAbility};
-        })
-        .whereType<JsonMap>()
-        .toList();
     return {
       ...lore,
-      'abilities': warscrolls,
+      'abilities': _summonedWarscrolls(abilities),
     };
+  }
+
+  List<JsonMap> _loreAbilities(JsonMap lore) => _rows('lore_ability')
+      .where((item) => item['loreId'] == lore['id'])
+      .map(_loreAbilityWithKeywords)
+      .toList();
+
+  List<JsonMap> _summonedWarscrolls(List<JsonMap> abilities) {
+    final abilityIds = abilities.map((item) => item['id']).toSet();
+    return _rows('lore_ability_linked_warscroll')
+        .where((link) => abilityIds.contains(link['loreAbilityId']))
+        .map((link) => _summonedWarscroll(link, abilities))
+        .whereType<JsonMap>()
+        .toList();
+  }
+
+  JsonMap? _summonedWarscroll(
+    JsonMap link,
+    List<JsonMap> abilities,
+  ) {
+    final summonAbility = abilities
+        .where((ability) => ability['id'] == link['loreAbilityId'])
+        .firstOrNull;
+    final warscroll = _rows('warscroll')
+        .where((unit) => unit['id'] == link['warscrollId'])
+        .firstOrNull;
+    if (summonAbility == null || warscroll == null) return null;
+    return {...warscroll, 'summonAbility': summonAbility};
   }
 
   JsonMap _withPublicationBackgroundImage(JsonMap item) {
