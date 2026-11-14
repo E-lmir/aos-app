@@ -57,6 +57,54 @@ class DataDetailsSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    return SafeArea(
+      child: SizedBox(
+        height: MediaQuery.sizeOf(context).height * 0.88,
+        child: Material(
+          color: Theme.of(context).colorScheme.surface,
+          child: Column(
+            children: [
+              _header(context),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                  children: _detailWidgets(context),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _header(BuildContext context) {
+    final unit = _asMap((details ?? item)['unit']) ?? item;
+    final name = item['name']?.toString() ??
+        item['title']?.toString() ??
+        unit['name']?.toString() ??
+        'Details';
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 8, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(
+              name,
+              style: Theme.of(context).textTheme.titleLarge,
+            ),
+          ),
+          IconButton(
+            tooltip: 'Close',
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.close),
+          ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _detailWidgets(BuildContext context) {
     final displayData = details ?? item;
     final unit = _asMap(displayData['unit']) ?? item;
     final abilities = _asMaps(displayData['abilities'] ?? item['abilities']);
@@ -66,156 +114,179 @@ class DataDetailsSheet extends StatelessWidget {
     final regimentOptions = _asMaps(displayData['regiment_options']);
     final regimentUnits = _asMaps(displayData['units'] ?? item['units']);
     final summonAbility = _asMap(item['summonAbility']);
+    final image = dataPreviewImageUrl(unit) ?? dataPreviewImageUrl(item);
+    return [
+      if (image != null) _bannerImage(image),
+      _statistics(unit),
+      ..._weaponWidgets(context, weapons),
+      ..._abilityWidgets(context, abilities),
+      ..._summoningWidgets(context, unit, summonAbility),
+      ..._descriptionWidgets(unit, characteristics),
+      ..._regimentWidgets(context, regimentOptions, regimentUnits),
+      ..._componentWidgets(context, components),
+      ..._emptyDescriptionWidgets(unit, abilities, weapons, components, image),
+      if (unit['referenceKeywords'] != null) _keywordSection(unit),
+    ];
+  }
+
+  List<Widget> _emptyDescriptionWidgets(
+    JsonMap unit,
+    List<JsonMap> abilities,
+    List<JsonMap> weapons,
+    List<JsonMap> components,
+    String? image,
+  ) {
+    if (abilities.isNotEmpty ||
+        weapons.isNotEmpty ||
+        components.isNotEmpty ||
+        _text(unit['lore']) != null ||
+        image != null) {
+      return [];
+    }
+    return [
+      const Padding(
+        padding: EdgeInsets.symmetric(vertical: 20),
+        child: Text('No additional description is available.'),
+      ),
+    ];
+  }
+
+  Widget _keywordSection(JsonMap unit) =>
+      _section('Keywords', unit['referenceKeywords'].toString());
+
+  List<Widget> _weaponWidgets(
+    BuildContext context,
+    List<JsonMap> weapons,
+  ) =>
+      [
+        if (weapons.isNotEmpty) _heading('Weapon profiles'),
+        for (final weapon in weapons) _weapon(context, weapon),
+      ];
+
+  List<Widget> _abilityWidgets(
+    BuildContext context,
+    List<JsonMap> abilities,
+  ) {
+    final hasDirectAbility = details == null && _isAbility(item);
+    if (abilities.isEmpty && !hasDirectAbility) return [];
+    final containsOnlyWarscrolls =
+        abilities.isNotEmpty && abilities.every(_isWarscroll);
+    return [
+      _heading(containsOnlyWarscrolls ? 'Manifestations' : 'Abilities'),
+      if (hasDirectAbility) _ability(context, item),
+      for (final ability in abilities)
+        if (_isAbility(ability))
+          _ability(context, ability)
+        else
+          _relatedUnit(context, ability),
+    ];
+  }
+
+  List<Widget> _summoningWidgets(
+    BuildContext context,
+    JsonMap unit,
+    JsonMap? summonAbility,
+  ) {
+    final widgets = <Widget>[];
+    if (summonAbility != null) {
+      widgets
+        ..add(_heading('Summoning spell'))
+        ..add(_ability(context, summonAbility));
+    }
+    if (_isManifestation(unit) ||
+        _isManifestation(item) ||
+        summonAbility != null) {
+      widgets.add(_banishmentSection(summonAbility));
+    }
+    return widgets;
+  }
+
+  Widget _banishmentSection(JsonMap? summonAbility) {
     final castingValue = summonAbility?['castingValue'];
     final banishmentValue = _banishmentValue(summonAbility);
-    final isManifestation = _isManifestation(unit) ||
-        _isManifestation(item) ||
-        summonAbility != null;
-    final hasDirectAbility = details == null && _isAbility(item);
-    final containsOnlyWarscrolls = abilities.isNotEmpty &&
-        abilities.every((ability) => _isWarscroll(ability));
-    final image = dataPreviewImageUrl(unit) ?? dataPreviewImageUrl(item);
-    final name = item['name']?.toString() ??
-        item['title']?.toString() ??
-        unit['name']?.toString() ??
-        'Details';
-
-    return SafeArea(
-      child: SizedBox(
-        height: MediaQuery.sizeOf(context).height * 0.88,
-        child: Material(
-          color: Theme.of(context).colorScheme.surface,
-          child: Column(
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(20, 12, 8, 8),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        name,
-                        style: Theme.of(context).textTheme.titleLarge,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: 'Close',
-                      onPressed: () => Navigator.pop(context),
-                      icon: const Icon(Icons.close),
-                    ),
-                  ],
-                ),
-              ),
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
-                  children: [
-                    if (image != null) _bannerImage(image),
-                    _statistics(unit),
-                    if (weapons.isNotEmpty) ...[
-                      _heading('Weapon profiles'),
-                      for (final weapon in weapons) _weapon(context, weapon),
-                    ],
-                    if (abilities.isNotEmpty || hasDirectAbility) ...[
-                      _heading(
-                        containsOnlyWarscrolls ? 'Manifestations' : 'Abilities',
-                      ),
-                      if (hasDirectAbility) _ability(context, item),
-                      for (final ability in abilities)
-                        if (_isAbility(ability))
-                          _ability(context, ability)
-                        else
-                          _relatedUnit(context, ability),
-                    ],
-                    if (summonAbility != null) ...[
-                      _heading('Summoning spell'),
-                      _ability(context, summonAbility),
-                    ],
-                    if (isManifestation)
-                      _section(
-                        'Banishment',
-                        banishmentValue != null
-                            ? 'Banishment value: $banishmentValue (Cast '
-                                '$castingValue + 1).'
-                            : "The banishment value is 1 higher than the "
-                                "manifestation's casting value. The casting "
-                                'value is not available in the source data.',
-                      ),
-                    if (unit['subname'] is String &&
-                        (unit['subname'] as String).isNotEmpty)
-                      _paragraph(unit['subname'].toString()),
-                    for (final field in const [
-                      ('lore', 'Description'),
-                      ('subsectionLore', 'Description'),
-                      ('subtitle', 'Description'),
-                      ('subsectionRulesText', 'Rules'),
-                      ('restrictionText', 'Restrictions'),
-                      ('optionText', 'Option'),
-                      ('wargearOptionsText', 'Wargear options'),
-                      ('notes', 'Notes'),
-                      ('altText', 'Additional details'),
-                      ('rules', 'Rules'),
-                    ])
-                      if (_text(unit[field.$1]) != null)
-                        _section(field.$2, _text(unit[field.$1])!),
-                    if (unit['points'] != null)
-                      _section('Points', '${unit['points']} pts')
-                    else if (unit['regimentOfRenownPointsCost'] != null)
-                      _section(
-                        'Points',
-                        '${unit['regimentOfRenownPointsCost']} pts',
-                      ),
-                    if (unit['modelCount'] != null)
-                      _section('Models', '${unit['modelCount']}'),
-                    if (unit['baseSize'] != null)
-                      _section('Base size', unit['baseSize'].toString()),
-                    for (final characteristic in characteristics)
-                      _section(
-                        characteristic['name']?.toString() ?? 'Characteristic',
-                        characteristic['value']?.toString() ?? '',
-                      ),
-                    if (regimentOptions.isNotEmpty) ...[
-                      _heading('Regiment options'),
-                      for (final option in regimentOptions)
-                        _regimentOption(option),
-                    ],
-                    if (regimentUnits.isNotEmpty) ...[
-                      _heading('Regiment composition'),
-                      for (final linkedUnit in regimentUnits)
-                        if (_asMap(linkedUnit['warscroll'])
-                            case final warscroll?)
-                          _relatedUnit(context, {
-                            ...warscroll,
-                            'name': regimentOfRenownUnitLabel(
-                              linkedUnit,
-                              warscroll,
-                            ),
-                          }),
-                    ],
-                    for (final component in components)
-                      _component(context, component),
-                    if (abilities.isEmpty &&
-                        weapons.isEmpty &&
-                        components.isEmpty &&
-                        _text(unit['lore']) == null &&
-                        image == null)
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 20),
-                        child: Text('No additional description is available.'),
-                      ),
-                    if (unit['referenceKeywords'] != null)
-                      _section(
-                        'Keywords',
-                        unit['referenceKeywords'].toString(),
-                      ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+    final description = banishmentValue != null
+        ? 'Banishment value: $banishmentValue (Cast $castingValue + 1).'
+        : "The banishment value is 1 higher than the manifestation's casting "
+            'value. The casting value is not available in the source data.';
+    return _section('Banishment', description);
   }
+
+  List<Widget> _descriptionWidgets(
+    JsonMap unit,
+    List<JsonMap> characteristics,
+  ) {
+    final widgets = <Widget>[];
+    if (unit['subname'] is String && (unit['subname'] as String).isNotEmpty) {
+      widgets.add(_paragraph(unit['subname'].toString()));
+    }
+    widgets.addAll(_unitTextSections(unit));
+    widgets.addAll(_unitFactSections(unit, characteristics));
+    return widgets;
+  }
+
+  List<Widget> _unitTextSections(JsonMap unit) => [
+        for (final field in const [
+          ('lore', 'Description'),
+          ('subsectionLore', 'Description'),
+          ('subtitle', 'Description'),
+          ('subsectionRulesText', 'Rules'),
+          ('restrictionText', 'Restrictions'),
+          ('optionText', 'Option'),
+          ('wargearOptionsText', 'Wargear options'),
+          ('notes', 'Notes'),
+          ('altText', 'Additional details'),
+          ('rules', 'Rules'),
+        ])
+          if (_text(unit[field.$1]) case final text?) _section(field.$2, text),
+      ];
+
+  List<Widget> _unitFactSections(
+    JsonMap unit,
+    List<JsonMap> characteristics,
+  ) =>
+      [
+        if (unit['points'] != null)
+          _section('Points', '${unit['points']} pts')
+        else if (unit['regimentOfRenownPointsCost'] != null)
+          _section(
+            'Points',
+            '${unit['regimentOfRenownPointsCost']} pts',
+          ),
+        if (unit['modelCount'] != null)
+          _section('Models', '${unit['modelCount']}'),
+        if (unit['baseSize'] != null)
+          _section('Base size', unit['baseSize'].toString()),
+        for (final characteristic in characteristics)
+          _section(
+            characteristic['name']?.toString() ?? 'Characteristic',
+            characteristic['value']?.toString() ?? '',
+          ),
+      ];
+
+  List<Widget> _regimentWidgets(
+    BuildContext context,
+    List<JsonMap> options,
+    List<JsonMap> units,
+  ) =>
+      [
+        if (options.isNotEmpty) _heading('Regiment options'),
+        for (final option in options) _regimentOption(option),
+        if (units.isNotEmpty) _heading('Regiment composition'),
+        for (final linkedUnit in units)
+          if (_asMap(linkedUnit['warscroll']) case final warscroll?)
+            _relatedUnit(context, {
+              ...warscroll,
+              'name': regimentOfRenownUnitLabel(linkedUnit, warscroll),
+            }),
+      ];
+
+  List<Widget> _componentWidgets(
+    BuildContext context,
+    List<JsonMap> components,
+  ) =>
+      [
+        for (final component in components) _component(context, component),
+      ];
 
   Widget _bannerImage(String url) {
     return Padding(
@@ -241,6 +312,19 @@ class DataDetailsSheet extends StatelessWidget {
   }
 
   Widget _statistics(JsonMap unit) {
+    final values = _statValues(unit);
+    if (values.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: _statChips(values),
+      ),
+    );
+  }
+
+  List<(String, String)> _statValues(JsonMap unit) {
     const fields = [
       ('move', 'Move'),
       ('health', 'Health'),
@@ -257,21 +341,13 @@ class DataDetailsSheet extends StatelessWidget {
       final value = _keywordValue(unit, keyword);
       if (value != null) values.add((keyword, value));
     }
-    if (values.isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 12),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
-        children: [
-          for (final field in values)
-            Chip(
-              label: Text('${field.$1}: ${field.$2}'),
-            ),
-        ],
-      ),
-    );
+    return values;
   }
+
+  List<Widget> _statChips(List<(String, String)> values) => [
+        for (final field in values)
+          Chip(label: Text('${field.$1}: ${field.$2}')),
+      ];
 
   String? _keywordValue(JsonMap unit, String keyword) {
     final referenceKeywords = _text(unit['referenceKeywords']);
@@ -289,78 +365,84 @@ class DataDetailsSheet extends StatelessWidget {
 
   Widget _weapon(BuildContext context, JsonMap weapon) {
     final name = weapon['name']?.toString() ?? 'Weapon';
-    final type = weapon['type']?.toString();
     final abilities = _asMaps(weapon['abilities']);
-    final characteristics = [
-      if (weapon['range'] != null) ('Rng', weapon['range'].toString()),
-      if (weapon['attacks'] != null) ('Atk', weapon['attacks'].toString()),
-      if (weapon['hit'] != null) ('Hit', weapon['hit'].toString()),
-      if (weapon['wound'] != null) ('Wnd', weapon['wound'].toString()),
-      if (weapon['rend'] != null) ('Rend', weapon['rend'].toString()),
-      if (weapon['damage'] != null) ('Dmg', weapon['damage'].toString()),
-    ];
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    name,
-                    style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                  ),
-                ),
-                if (type != null)
-                  Chip(
-                    visualDensity: VisualDensity.compact,
-                    label: Text(_capitalize(type)),
-                  ),
-              ],
-            ),
-          ),
-          if (characteristics.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
-              child: Row(
-                children: [
-                  for (final stat in characteristics)
-                    Expanded(
-                      child: Column(
-                        children: [
-                          Text(
-                            stat.$1,
-                            style: Theme.of(context).textTheme.labelSmall,
-                          ),
-                          const SizedBox(height: 2),
-                          FittedBox(
-                            fit: BoxFit.scaleDown,
-                            child: Text(
-                              stat.$2,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleSmall
-                                  ?.copyWith(fontWeight: FontWeight.w700),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                ],
-              ),
-            ),
+          _weaponHeader(context, name, weapon['type']),
+          _weaponCharacteristics(context, weapon),
           if (abilities.isNotEmpty) const Divider(height: 1),
           for (final ability in abilities) _weaponAbility(ability),
         ],
       ),
     );
   }
+
+  Widget _weaponHeader(BuildContext context, String name, Object? type) =>
+      Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+        child: Row(
+          children: [
+            Expanded(
+              child: Text(
+                name,
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+              ),
+            ),
+            if (type != null)
+              Chip(
+                visualDensity: VisualDensity.compact,
+                label: Text(_capitalize(type.toString())),
+              ),
+          ],
+        ),
+      );
+
+  Widget _weaponCharacteristics(BuildContext context, JsonMap weapon) {
+    final characteristics = _weaponCharacteristicValues(weapon);
+    if (characteristics.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(8, 0, 8, 10),
+      child: Row(
+        children: [
+          for (final stat in characteristics)
+            Expanded(child: _weaponCharacteristic(context, stat)),
+        ],
+      ),
+    );
+  }
+
+  List<(String, String)> _weaponCharacteristicValues(JsonMap weapon) => [
+        if (weapon['range'] != null) ('Rng', weapon['range'].toString()),
+        if (weapon['attacks'] != null) ('Atk', weapon['attacks'].toString()),
+        if (weapon['hit'] != null) ('Hit', weapon['hit'].toString()),
+        if (weapon['wound'] != null) ('Wnd', weapon['wound'].toString()),
+        if (weapon['rend'] != null) ('Rend', weapon['rend'].toString()),
+        if (weapon['damage'] != null) ('Dmg', weapon['damage'].toString()),
+      ];
+
+  Widget _weaponCharacteristic(BuildContext context, (String, String) stat) =>
+      Column(
+        children: [
+          Text(stat.$1, style: Theme.of(context).textTheme.labelSmall),
+          const SizedBox(height: 2),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(
+              stat.$2,
+              style: Theme.of(context)
+                  .textTheme
+                  .titleSmall
+                  ?.copyWith(fontWeight: FontWeight.w700),
+            ),
+          ),
+        ],
+      );
 
   Widget _weaponAbility(JsonMap ability) {
     final rules = _text(ability['rules']);
@@ -386,112 +468,130 @@ class DataDetailsSheet extends StatelessWidget {
   }
 
   Widget _ability(BuildContext context, JsonMap ability) {
-    final phase = _text(ability['phaseDetails']);
-    final descriptionFields = [
-      ('Declare', _text(ability['declare'])),
-      ('Used by', _text(ability['usedBy'])),
-      ('Effect', _text(ability['effect'])),
-      ('Additional details', _text(ability['altText'])),
-      ('Additional rules', _text(ability['additionalRulesText'])),
-      ('Rules', _text(ability['rules'])),
-    ].where((field) => field.$2 != null);
-    final keywords = _asMaps(ability['keywords'])
-        .map((keyword) => keyword['name']?.toString())
-        .whereType<String>()
-        .toList();
-    final castingValue = ability['castingValue'];
-    final chantingValue = ability['chantingValue'];
-    final cost = ability['cost'];
-    final metadata = [
-      if (castingValue != null) 'Casting $castingValue',
-      if (chantingValue != null) 'Chanting $chantingValue',
-      if (cost != null) 'Cost $cost',
-      if (ability['cpCost'] != null) '${ability['cpCost']} CP',
-      if (ability['points'] != null) '${ability['points']} pts',
-    ];
-
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (phase != null)
-            Container(
-              width: double.infinity,
-              color: Theme.of(context).colorScheme.secondaryContainer,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-              child: Text(
-                _plainText(phase),
-                style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSecondaryContainer,
-                      fontWeight: FontWeight.w600,
-                    ),
-              ),
-            ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        ability['name']?.toString() ?? 'Ability',
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                              fontWeight: FontWeight.w700,
-                            ),
-                      ),
-                    ),
-                  ],
-                ),
-                if (metadata.isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: [
-                      for (final value in metadata)
-                        Chip(
-                          visualDensity: VisualDensity.compact,
-                          label: Text(value),
-                        ),
-                    ],
-                  ),
-                ],
-                if (_text(ability['lore']) case final lore?) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _plainText(lore),
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          fontStyle: FontStyle.italic,
-                        ),
-                  ),
-                ],
-                for (final field in descriptionFields)
-                  _abilityDescription(context, field.$1, field.$2!),
-                if (keywords.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Wrap(
-                    spacing: 6,
-                    runSpacing: 4,
-                    children: [
-                      for (final keyword in keywords)
-                        Chip(
-                          visualDensity: VisualDensity.compact,
-                          label: Text(keyword),
-                        ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
+          if (_text(ability['phaseDetails']) case final phase?)
+            _abilityPhase(context, phase),
+          _abilityBody(context, ability),
         ],
       ),
     );
+  }
+
+  Widget _abilityPhase(BuildContext context, String phase) => Container(
+        width: double.infinity,
+        color: Theme.of(context).colorScheme.secondaryContainer,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        child: Text(
+          _plainText(phase),
+          style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSecondaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
+        ),
+      );
+
+  Widget _abilityBody(BuildContext context, JsonMap ability) => Padding(
+        padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _abilityTitle(context, ability),
+            ..._abilityMetadataWidgets(ability),
+            if (_text(ability['lore']) case final lore?)
+              _abilityLore(context, lore),
+            ..._abilityDescriptions(context, ability),
+            ..._abilityKeywords(ability),
+          ],
+        ),
+      );
+
+  Widget _abilityTitle(BuildContext context, JsonMap ability) => Text(
+        ability['name']?.toString() ?? 'Ability',
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              fontWeight: FontWeight.w700,
+            ),
+      );
+
+  List<Widget> _abilityMetadataWidgets(JsonMap ability) {
+    final metadata = [
+      if (ability['castingValue'] != null) 'Casting ${ability['castingValue']}',
+      if (ability['chantingValue'] != null)
+        'Chanting ${ability['chantingValue']}',
+      if (ability['cost'] != null) 'Cost ${ability['cost']}',
+      if (ability['cpCost'] != null) '${ability['cpCost']} CP',
+      if (ability['points'] != null) '${ability['points']} pts',
+    ];
+    if (metadata.isEmpty) return [];
+    return [
+      const SizedBox(height: 6),
+      Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          for (final value in metadata)
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text(value),
+            ),
+        ],
+      ),
+    ];
+  }
+
+  Widget _abilityLore(BuildContext context, String lore) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          _plainText(lore),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontStyle: FontStyle.italic,
+              ),
+        ),
+      );
+
+  List<Widget> _abilityDescriptions(
+    BuildContext context,
+    JsonMap ability,
+  ) {
+    const labels = [
+      ('Declare', 'declare'),
+      ('Used by', 'usedBy'),
+      ('Effect', 'effect'),
+      ('Additional details', 'altText'),
+      ('Additional rules', 'additionalRulesText'),
+      ('Rules', 'rules'),
+    ];
+    return [
+      for (final field in labels)
+        if (_text(ability[field.$2]) case final text?)
+          _abilityDescription(context, field.$1, text),
+    ];
+  }
+
+  List<Widget> _abilityKeywords(JsonMap ability) {
+    final keywords = _asMaps(ability['keywords'])
+        .map((keyword) => keyword['name']?.toString())
+        .whereType<String>()
+        .toList();
+    if (keywords.isEmpty) return [];
+    return [
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 6,
+        runSpacing: 4,
+        children: [
+          for (final keyword in keywords)
+            Chip(
+              visualDensity: VisualDensity.compact,
+              label: Text(keyword),
+            ),
+        ],
+      ),
+    ];
   }
 
   Widget _abilityDescription(
@@ -537,6 +637,27 @@ class DataDetailsSheet extends StatelessWidget {
   }
 
   Widget _component(BuildContext context, JsonMap component) {
+    final details = _componentDetails(component);
+    if (details == null) return const SizedBox.shrink();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: _componentContent(context, component, details),
+        ),
+      ),
+    );
+  }
+
+  ({
+    String? image,
+    String? title,
+    String? text,
+    JsonMap? ability,
+    JsonMap? battleTactic,
+    List<JsonMap> bullets,
+  })? _componentDetails(JsonMap component) {
     final image = _imageUrl(component['imageUrl']);
     final title = component['title']?.toString();
     final text = _text(component['textContent']);
@@ -549,49 +670,64 @@ class DataDetailsSheet extends StatelessWidget {
         ability == null &&
         battleTactic == null &&
         bullets.isEmpty) {
-      return const SizedBox.shrink();
+      return null;
     }
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (title != null)
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
-            if (image != null) ...[
-              const SizedBox(height: 8),
-              _bannerImage(image),
-            ],
-            if (text != null)
-              Padding(
-                padding: const EdgeInsets.only(top: 8),
-                child: Text(
-                  _plainText(text),
-                  style: component['contentType'] == 'textItalic' ||
-                          component['contentType'] == 'loreAccordion'
-                      ? const TextStyle(fontStyle: FontStyle.italic)
-                      : null,
-                ),
-              ),
-            if (bullets.isNotEmpty)
-              for (final bullet in bullets)
-                Padding(
-                  padding: const EdgeInsets.only(top: 6),
-                  child:
-                      Text('• ${_plainText(bullet['text']?.toString() ?? '')}'),
-                ),
-            if (ability != null) _ability(context, ability),
-            if (battleTactic != null) _battleTactic(context, battleTactic),
-          ],
-        ),
-      ),
+    return (
+      image: image,
+      title: title,
+      text: text,
+      ability: ability,
+      battleTactic: battleTactic,
+      bullets: bullets,
     );
   }
 
+  List<Widget> _componentContent(
+    BuildContext context,
+    JsonMap component,
+    ({
+      String? image,
+      String? title,
+      String? text,
+      JsonMap? ability,
+      JsonMap? battleTactic,
+      List<JsonMap> bullets,
+    }) details,
+  ) =>
+      [
+        if (details.title != null)
+          Text(
+            details.title!,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
+        if (details.image != null) ...[
+          const SizedBox(height: 8),
+          _bannerImage(details.image!),
+        ],
+        if (details.text != null) _componentText(component, details.text!),
+        for (final bullet in details.bullets) _componentBullet(bullet),
+        if (details.ability != null) _ability(context, details.ability!),
+        if (details.battleTactic != null)
+          _battleTactic(context, details.battleTactic!),
+      ];
+
+  Widget _componentText(JsonMap component, String text) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          _plainText(text),
+          style: component['contentType'] == 'textItalic' ||
+                  component['contentType'] == 'loreAccordion'
+              ? const TextStyle(fontStyle: FontStyle.italic)
+              : null,
+        ),
+      );
+
+  Widget _componentBullet(JsonMap bullet) => Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text('• ${_plainText(bullet['text']?.toString() ?? '')}'),
+      );
+
   Widget _battleTactic(BuildContext context, JsonMap tactic) {
-    final type = tactic['battleTacticType']?.toString();
-    final points = tactic['victoryPoints'];
     final lore = _text(tactic['lore']);
     final rules = _text(tactic['rulesText']);
     return Container(
@@ -605,60 +741,71 @@ class DataDetailsSheet extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  type == null ? 'Battle tactic' : _capitalize(type),
-                  style: Theme.of(context).textTheme.labelLarge?.copyWith(
-                        color:
-                            Theme.of(context).colorScheme.onSecondaryContainer,
-                        fontWeight: FontWeight.w700,
-                      ),
-                ),
-              ),
-              if (points != null)
-                Chip(
-                  visualDensity: VisualDensity.compact,
-                  label: Text('$points VP'),
-                ),
-            ],
-          ),
+          _battleTacticHeader(context, tactic),
           const SizedBox(height: 4),
           Text(
             tactic['name']?.toString() ?? 'Battle tactic',
             style: Theme.of(context).textTheme.titleSmall,
           ),
-          if (lore != null) ...[
-            const SizedBox(height: 6),
-            Text(
-              _plainText(lore),
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    fontStyle: FontStyle.italic,
-                  ),
-            ),
-          ],
-          const SizedBox(height: 8),
-          Text.rich(
-            TextSpan(
-              style: Theme.of(context).textTheme.bodyMedium,
-              children: [
-                const TextSpan(
-                  text: 'Tactics: ',
-                  style: TextStyle(fontWeight: FontWeight.w700),
-                ),
-                TextSpan(
-                  text: rules == null
-                      ? 'No description is available.'
-                      : _plainText(rules),
-                ),
-              ],
-            ),
-          ),
+          if (lore != null) _battleTacticLore(context, lore),
+          _battleTacticRules(context, rules),
         ],
       ),
     );
   }
+
+  Widget _battleTacticHeader(BuildContext context, JsonMap tactic) {
+    final type = tactic['battleTacticType']?.toString();
+    final points = tactic['victoryPoints'];
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            type == null ? 'Battle tactic' : _capitalize(type),
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+                  color: Theme.of(context).colorScheme.onSecondaryContainer,
+                  fontWeight: FontWeight.w700,
+                ),
+          ),
+        ),
+        if (points != null)
+          Chip(
+            visualDensity: VisualDensity.compact,
+            label: Text('$points VP'),
+          ),
+      ],
+    );
+  }
+
+  Widget _battleTacticLore(BuildContext context, String lore) => Padding(
+        padding: const EdgeInsets.only(top: 6),
+        child: Text(
+          _plainText(lore),
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                fontStyle: FontStyle.italic,
+              ),
+        ),
+      );
+
+  Widget _battleTacticRules(BuildContext context, String? rules) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text.rich(
+          TextSpan(
+            style: Theme.of(context).textTheme.bodyMedium,
+            children: [
+              const TextSpan(
+                text: 'Tactics: ',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              TextSpan(
+                text: rules == null
+                    ? 'No description is available.'
+                    : _plainText(rules),
+              ),
+            ],
+          ),
+        ),
+      );
 
   Widget _relatedUnit(BuildContext context, JsonMap unit) {
     final summonAbility = _asMap(unit['summonAbility']);
