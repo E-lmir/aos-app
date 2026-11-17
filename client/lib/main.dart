@@ -76,61 +76,67 @@ class _HomePageState extends State<HomePage> {
   Widget build(BuildContext context) {
     return PopScope<Object?>(
       canPop: _selectedArmy == null || _selectedIndex != 0,
-      onPopInvokedWithResult: (didPop, _) {
-        if (!didPop && _selectedArmy != null && _selectedIndex == 0) {
-          _closeArmy();
-        }
-      },
+      onPopInvokedWithResult: _handlePop,
       child: Scaffold(
-        body: IndexedStack(
-          index: _selectedIndex,
-          children: [
-            ArmyBuilderPage(
-              key: ValueKey(_selectedArmy?['id'] ?? 'new-builder'),
-              savedArmy: _selectedArmy,
-              apiClient: _api,
-              onClose: _selectedArmy == null ? null : _closeArmy,
-            ),
-            RulesPage(apiClient: _api),
-            SavedArmiesPage(
-              isActive: _selectedIndex == 2,
-              onOpen: _openArmy,
-              apiClient: _api,
-            ),
-            OfflineSettingsPage(apiClient: _api),
-          ],
-        ),
-        bottomNavigationBar: NavigationBar(
-          selectedIndex: _selectedIndex,
-          onDestinationSelected: (index) {
-            setState(() => _selectedIndex = index);
-          },
-          destinations: const [
-            NavigationDestination(
-              icon: Icon(Icons.shield_outlined),
-              selectedIcon: Icon(Icons.shield),
-              label: 'Builder',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.menu_book_outlined),
-              selectedIcon: Icon(Icons.menu_book),
-              label: 'Rules',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.bookmarks_outlined),
-              selectedIcon: Icon(Icons.bookmarks),
-              label: 'Armies',
-            ),
-            NavigationDestination(
-              icon: Icon(Icons.offline_bolt_outlined),
-              selectedIcon: Icon(Icons.offline_bolt),
-              label: 'Offline',
-            ),
-          ],
-        ),
+        body: _pageStack(),
+        bottomNavigationBar: _navigationBar(),
       ),
     );
   }
+
+  void _handlePop(bool didPop, Object? result) {
+    if (!didPop && _selectedArmy != null && _selectedIndex == 0) {
+      _closeArmy();
+    }
+  }
+
+  Widget _pageStack() => IndexedStack(
+        index: _selectedIndex,
+        children: [
+          ArmyBuilderPage(
+            key: ValueKey(_selectedArmy?['id'] ?? 'new-builder'),
+            savedArmy: _selectedArmy,
+            apiClient: _api,
+            onClose: _selectedArmy == null ? null : _closeArmy,
+          ),
+          RulesPage(apiClient: _api),
+          SavedArmiesPage(
+            isActive: _selectedIndex == 2,
+            onOpen: _openArmy,
+            apiClient: _api,
+          ),
+          OfflineSettingsPage(apiClient: _api),
+        ],
+      );
+
+  Widget _navigationBar() => NavigationBar(
+        selectedIndex: _selectedIndex,
+        onDestinationSelected: (index) {
+          setState(() => _selectedIndex = index);
+        },
+        destinations: const [
+          NavigationDestination(
+            icon: Icon(Icons.shield_outlined),
+            selectedIcon: Icon(Icons.shield),
+            label: 'Builder',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.menu_book_outlined),
+            selectedIcon: Icon(Icons.menu_book),
+            label: 'Rules',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.bookmarks_outlined),
+            selectedIcon: Icon(Icons.bookmarks),
+            label: 'Armies',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.offline_bolt_outlined),
+            selectedIcon: Icon(Icons.offline_bolt),
+            label: 'Offline',
+          ),
+        ],
+      );
 }
 
 class OfflineSettingsPage extends StatefulWidget {
@@ -200,77 +206,87 @@ class _OfflineSettingsPageState extends State<OfflineSettingsPage> {
 
   Future<void> _load() async {
     try {
-      final enabled = await _store.isEnabled();
-      if (!enabled) {
-        if (!mounted) return;
-        setState(() {
-          _enabled = false;
-          _dataVersion = null;
-        });
+      if (!await _store.isEnabled()) {
+        _setDatabaseDisabled();
         return;
       }
-
-      int? cachedVersion;
-      Object? cacheReadError;
-      try {
-        cachedVersion = await _store.cachedDataVersion();
-      } catch (error) {
-        cacheReadError = error;
-      }
+      final cached = await _readCachedVersion();
       if (!mounted) return;
       setState(() {
         _enabled = true;
-        _dataVersion = cachedVersion;
+        _dataVersion = cached.version;
         _working = true;
       });
-
-      try {
-        final metadata = await _api.metadata();
-        final remoteVersion = metadata['data_version'];
-        if (remoteVersion is! int) {
-          throw const FormatException('API returned an invalid data version.');
-        }
-        if (remoteVersion == cachedVersion) return;
-
-        final database = await _api.downloadDatabase();
-        await _store.cacheAndEnable(database);
-        ApiClient.clearMemoryCache();
-        if (mounted) {
-          setState(() {
-            _dataVersion = remoteVersion;
-            _errorMessage = null;
-          });
-        }
-      } catch (error) {
-        final cacheNote = cacheReadError == null
-            ? ''
-            : ' The existing offline database could not be read: $cacheReadError';
-        _showMessage('Offline database update failed: $error.$cacheNote');
-      } finally {
-        if (mounted) setState(() => _working = false);
-      }
+      await _refreshOfflineDatabase(cached.version, cached.error);
     } catch (error) {
       _showMessage(error.toString());
       if (mounted) setState(() => _enabled = false);
     }
   }
 
+  void _setDatabaseDisabled() {
+    if (!mounted) return;
+    setState(() {
+      _enabled = false;
+      _dataVersion = null;
+    });
+  }
+
+  Future<({int? version, Object? error})> _readCachedVersion() async {
+    try {
+      return (version: await _store.cachedDataVersion(), error: null);
+    } catch (error) {
+      return (version: null, error: error);
+    }
+  }
+
+  Future<void> _refreshOfflineDatabase(
+    int? cachedVersion,
+    Object? cacheReadError,
+  ) async {
+    try {
+      final remoteVersion = await _remoteDataVersion();
+      if (remoteVersion != cachedVersion) {
+        await _cacheRemoteDatabase(remoteVersion);
+      }
+    } catch (error) {
+      _showOfflineUpdateError(error, cacheReadError);
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<int> _remoteDataVersion() async {
+    final metadata = await _api.metadata();
+    final version = metadata['data_version'];
+    if (version is! int) {
+      throw const FormatException('API returned an invalid data version.');
+    }
+    return version;
+  }
+
+  Future<void> _cacheRemoteDatabase(int version) async {
+    final database = await _api.downloadDatabase();
+    await _store.cacheAndEnable(database);
+    ApiClient.clearMemoryCache();
+    if (!mounted) return;
+    setState(() {
+      _dataVersion = version;
+      _errorMessage = null;
+    });
+  }
+
+  void _showOfflineUpdateError(Object error, Object? cacheReadError) {
+    final cacheNote = cacheReadError == null
+        ? ''
+        : ' The existing offline database could not be read: $cacheReadError';
+    _showMessage('Offline database update failed: $error.$cacheNote');
+  }
+
   Future<void> _setEnabled(bool enabled) async {
     setState(() => _working = true);
     try {
-      if (enabled) {
-        final database = await _api.downloadDatabase();
-        await _store.cacheAndEnable(database);
-        ApiClient.clearMemoryCache();
-        _dataVersion = database['metadata'] is Map<String, dynamic>
-            ? (database['metadata'] as Map<String, dynamic>)['data_version']
-                as int?
-            : null;
-      } else {
-        await _store.disableAndRemove();
-        ApiClient.clearMemoryCache();
-        _dataVersion = null;
-      }
+      _dataVersion = await _toggleOfflineDatabase(enabled);
       if (mounted) {
         setState(() {
           _enabled = enabled;
@@ -287,110 +303,141 @@ class _OfflineSettingsPageState extends State<OfflineSettingsPage> {
     }
   }
 
+  Future<int?> _toggleOfflineDatabase(bool enabled) async {
+    if (!enabled) {
+      await _store.disableAndRemove();
+      ApiClient.clearMemoryCache();
+      return null;
+    }
+    final database = await _api.downloadDatabase();
+    await _store.cacheAndEnable(database);
+    ApiClient.clearMemoryCache();
+    return _versionFromDatabase(database);
+  }
+
+  int? _versionFromDatabase(JsonMap database) {
+    final metadata = database['metadata'];
+    if (metadata is Map<String, dynamic>) {
+      return metadata['data_version'] as int?;
+    }
+    return null;
+  }
+
   Future<void> _setImagesCached(bool enabled) async {
+    _startImageCacheUpdate(enabled);
+    try {
+      if (!enabled) {
+        await _clearImageCache();
+        return;
+      }
+      await _downloadImageCache();
+    } catch (error) {
+      _showImageCacheError('Image download failed: $error');
+    } finally {
+      _finishImageCacheUpdate();
+    }
+  }
+
+  void _startImageCacheUpdate(bool enabled) {
     setState(() {
       _imageDownloadWorking = true;
       _imageErrorMessage = null;
       _cancelImageDownload = false;
-      if (enabled) {
-        _imagesCached = true;
-        _imageProgress = 0;
-        _imageTotal = 0;
-      }
+      if (!enabled) return;
+      _imagesCached = true;
+      _imageProgress = 0;
+      _imageTotal = 0;
     });
+  }
 
-    try {
-      if (!enabled) {
-        await DataImageCache.clearAll();
-        if (mounted) {
-          setState(() {
-            _imagesCached = false;
-            _cachedImageCount = 0;
-            _imageProgress = 0;
-            _imageTotal = 0;
-          });
-        }
-        return;
-      }
+  Future<void> _clearImageCache() async {
+    await DataImageCache.clearAll();
+    if (!mounted) return;
+    setState(() {
+      _imagesCached = false;
+      _cachedImageCount = 0;
+      _imageProgress = 0;
+      _imageTotal = 0;
+    });
+  }
 
-      final database =
-          await _store.readIfEnabled() ?? await _api.downloadDatabase();
-      final urls = DataImageCache.imageUrlsFrom(database);
-      if (urls.isEmpty) {
-        throw StateError('No image URLs were found in the database.');
-      }
-      final metadata = database['metadata'];
-      final dataVersion = metadata is Map && metadata['data_version'] is int
-          ? metadata['data_version'] as int
-          : null;
-      if (mounted) {
-        setState(() {
-          _imageTotal = urls.length;
-          _imageProgress = 0;
-        });
-      }
+  Future<void> _downloadImageCache() async {
+    final database =
+        await _store.readIfEnabled() ?? await _api.downloadDatabase();
+    final urls = DataImageCache.imageUrlsFrom(database);
+    if (urls.isEmpty) {
+      throw StateError('No image URLs were found in the database.');
+    }
+    final version = _versionFromAnyMetadata(database['metadata']);
+    _setImageProgress(0, urls.length);
+    final result = await _downloadImageUrls(urls);
+    if (_reportIncompleteImageDownload(result)) return;
+    await DataImageCache.markComplete(
+      imageCount: result.total,
+      dataVersion: version,
+    );
+    _showImageCacheComplete(result.total);
+  }
 
-      final result = await DataImageCache.cacheAll(
+  int? _versionFromAnyMetadata(Object? metadata) {
+    if (metadata is! Map || metadata['data_version'] is! int) return null;
+    return metadata['data_version'] as int;
+  }
+
+  Future<ImageCacheDownloadResult> _downloadImageUrls(List<String> urls) =>
+      DataImageCache.cacheAll(
         urls,
         shouldCancel: () => _cancelImageDownload,
-        onProgress: (completed, total) {
-          if (!mounted) return;
-          setState(() {
-            _imageProgress = completed;
-            _imageTotal = total;
-          });
-        },
+        onProgress: _setImageProgress,
       );
-      if (result.cancelled) {
-        if (mounted) {
-          setState(() {
-            _imagesCached = false;
-            _imageErrorMessage =
-                'Image download cancelled after processing '
-                '${result.completed} of ${result.total} images. '
-                'Cached files are kept, so you can resume later.';
-          });
-        }
-        return;
-      }
-      if (result.failed > 0) {
-        if (mounted) {
-          setState(() {
-            _imagesCached = false;
-            _imageErrorMessage =
-                'Could not download ${result.failed} of ${result.total} '
-                'images. Check the connection and try again.';
-          });
-        }
-        return;
-      }
 
-      await DataImageCache.markComplete(
-        imageCount: result.total,
-        dataVersion: dataVersion,
+  void _setImageProgress(int completed, int total) {
+    if (!mounted) return;
+    setState(() {
+      _imageProgress = completed;
+      _imageTotal = total;
+    });
+  }
+
+  bool _reportIncompleteImageDownload(ImageCacheDownloadResult result) {
+    if (result.cancelled) {
+      _showImageCacheError(
+        'Image download cancelled after processing ${result.completed} '
+        'of ${result.total} images. Cached files are kept, so you can resume later.',
       );
-      if (mounted) {
-        setState(() {
-          _imagesCached = true;
-          _cachedImageCount = result.total;
-          _imageErrorMessage = null;
-        });
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() {
-          _imagesCached = false;
-          _imageErrorMessage = 'Image download failed: $error';
-        });
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _imageDownloadWorking = false;
-          _cancelImageDownload = false;
-        });
-      }
+      return true;
     }
+    if (result.failed == 0) return false;
+    _showImageCacheError(
+      'Could not download ${result.failed} of ${result.total} images. '
+      'Check the connection and try again.',
+    );
+    return true;
+  }
+
+  void _showImageCacheComplete(int imageCount) {
+    if (!mounted) return;
+    setState(() {
+      _imagesCached = true;
+      _cachedImageCount = imageCount;
+      _imageErrorMessage = null;
+    });
+  }
+
+  void _showImageCacheError(String message) {
+    if (!mounted) return;
+    setState(() {
+      _imagesCached = false;
+      _imageErrorMessage = message;
+    });
+  }
+
+  void _finishImageCacheUpdate() {
+    if (!mounted) return;
+    setState(() {
+      _imageDownloadWorking = false;
+      _cancelImageDownload = false;
+    });
   }
 
   void _cancelImageDownloadNow() {
@@ -407,105 +454,111 @@ class _OfflineSettingsPageState extends State<OfflineSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final enabled = _enabled;
     return Scaffold(
       appBar: AppBar(title: const Text('Offline data')),
-      body: enabled == null
+      body: _enabled == null
           ? const Center(child: CircularProgressIndicator())
-          : ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Download the entire database'),
-                  subtitle: Text(
-                    enabled
-                        ? 'Stored on this device · version ${_dataVersion ?? 'unknown'}'
-                        : 'Downloads rules and army-builder data for offline use.',
-                  ),
-                  value: enabled,
-                  onChanged: _working || _imageDownloadWorking
-                      ? null
-                      : _setEnabled,
-                ),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('Download all images'),
-                  subtitle: Text(
-                    _imageStatusLoading
-                        ? 'Checking image cache status…'
-                        : _imagesCached
-                            ? '$_cachedImageCount images stored on this device. '
-                                'Switch off to remove them.'
-                            : 'Downloads catalog images for offline use. '
-                                'Uses network data and device storage.',
-                  ),
-                  value: _imagesCached,
-                  onChanged: _imageStatusLoading ||
-                          _working ||
-                          _imageDownloadWorking
-                      ? null
-                      : _setImagesCached,
-                ),
-                if (_imageDownloadWorking) ...[
-                  const SizedBox(height: 8),
-                  LinearProgressIndicator(
-                    value: _imageTotal == 0
-                        ? null
-                        : _imageProgress / _imageTotal,
-                  ),
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          _imageTotal == 0
-                              ? 'Preparing image download…'
-                              : 'Processed $_imageProgress of '
-                                  '$_imageTotal images',
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: _cancelImageDownload
-                            ? null
-                            : _cancelImageDownloadNow,
-                        child: const Text('Cancel'),
-                      ),
-                    ],
-                  ),
-                ],
-                if (_imageErrorMessage != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _imageErrorMessage!,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ],
-                if (_errorMessage != null) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    _errorMessage!,
-                    style:
-                        TextStyle(color: Theme.of(context).colorScheme.error),
-                  ),
-                ],
-                if (_working) ...[
-                  const SizedBox(height: 8),
-                  const LinearProgressIndicator(),
-                  const SizedBox(height: 8),
-                  const Text('Downloading or removing offline data…'),
-                ],
-                const SizedBox(height: 16),
-                const Text(
-                  'When enabled, the builder uses this database if the API is '
-                  'unavailable. The download can use significant storage and '
-                  'network data.',
-                ),
-              ],
-            ),
+          : _settingsList(),
     );
   }
+
+  Widget _settingsList() => ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _databaseSwitch(),
+          _imageCacheSwitch(),
+          if (_imageDownloadWorking) _imageDownloadProgress(),
+          if (_imageErrorMessage != null) _errorText(_imageErrorMessage!),
+          if (_errorMessage != null) _errorText(_errorMessage!),
+          if (_working) _databaseProgress(),
+          const SizedBox(height: 16),
+          const Text(
+            'When enabled, the builder uses this database if the API is '
+            'unavailable. The download can use significant storage and '
+            'network data.',
+          ),
+        ],
+      );
+
+  Widget _databaseSwitch() {
+    final enabled = _enabled!;
+    return SwitchListTile(
+      contentPadding: EdgeInsets.zero,
+      title: const Text('Download the entire database'),
+      subtitle: Text(
+        enabled
+            ? 'Stored on this device · version ${_dataVersion ?? 'unknown'}'
+            : 'Downloads rules and army-builder data for offline use.',
+      ),
+      value: enabled,
+      onChanged: _working || _imageDownloadWorking ? null : _setEnabled,
+    );
+  }
+
+  Widget _imageCacheSwitch() => SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Download all images'),
+        subtitle: Text(_imageCacheDescription()),
+        value: _imagesCached,
+        onChanged:
+            _imageStatusLoading || _working || _imageDownloadWorking
+                ? null
+                : _setImagesCached,
+      );
+
+  String _imageCacheDescription() {
+    if (_imageStatusLoading) return 'Checking image cache status…';
+    if (_imagesCached) {
+      return '$_cachedImageCount images stored on this device. '
+          'Switch off to remove them.';
+    }
+    return 'Downloads catalog images for offline use. '
+        'Uses network data and device storage.';
+  }
+
+  Widget _imageDownloadProgress() => Column(
+        children: [
+          const SizedBox(height: 8),
+          LinearProgressIndicator(
+            value: _imageTotal == 0 ? null : _imageProgress / _imageTotal,
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(child: Text(_imageProgressDescription())),
+              TextButton(
+                onPressed:
+                    _cancelImageDownload ? null : _cancelImageDownloadNow,
+                child: const Text('Cancel'),
+              ),
+            ],
+          ),
+        ],
+      );
+
+  String _imageProgressDescription() => _imageTotal == 0
+      ? 'Preparing image download…'
+      : 'Processed $_imageProgress of $_imageTotal images';
+
+  Widget _errorText(String message) => Padding(
+        padding: const EdgeInsets.only(top: 8),
+        child: Text(
+          message,
+          style: TextStyle(color: Theme.of(context).colorScheme.error),
+        ),
+      );
+
+  Widget _databaseProgress() => const Padding(
+        padding: EdgeInsets.only(top: 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LinearProgressIndicator(),
+            SizedBox(height: 8),
+            Text('Downloading or removing offline data…'),
+          ],
+        ),
+      );
 }
 
 class SavedArmiesPage extends StatefulWidget {
@@ -632,32 +685,38 @@ class _SavedArmiesPageState extends State<SavedArmiesPage> {
     if (_pasting) return;
     setState(() => _pasting = true);
     try {
-      final text =
-          (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim();
-      if (text == null || text.isEmpty) {
-        throw const FormatException('The clipboard does not contain a list.');
-      }
-
-      final army = await ArmyListText.importText(text, _api);
-      if (!mounted) return;
-      final factionName = army['faction_name']?.toString() ?? 'Army';
-      final name = await showDialog<String>(
-        context: context,
-        builder: (context) => SaveArmyNameDialog(
-          title: 'Import army list',
-          initialName: '$factionName list',
-        ),
-      );
-      if (!mounted || name == null) return;
-      await _store.save(name: name, army: army);
-
-      await _reload();
-      _showMessage('Army list imported.');
+      final army = await _readPastedArmy();
+      if (army == null) return;
+      await _saveImportedArmy(army);
     } catch (error) {
       _showMessage('Could not import army list: $error');
     } finally {
       if (mounted) setState(() => _pasting = false);
     }
+  }
+
+  Future<JsonMap?> _readPastedArmy() async {
+    final text = (await Clipboard.getData(Clipboard.kTextPlain))?.text?.trim();
+    if (text == null || text.isEmpty) {
+      throw const FormatException('The clipboard does not contain a list.');
+    }
+    final army = await ArmyListText.importText(text, _api);
+    return mounted ? army : null;
+  }
+
+  Future<void> _saveImportedArmy(JsonMap army) async {
+    final factionName = army['faction_name']?.toString() ?? 'Army';
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => SaveArmyNameDialog(
+        title: 'Import army list',
+        initialName: '$factionName list',
+      ),
+    );
+    if (!mounted || name == null) return;
+    await _store.save(name: name, army: army);
+    await _reload();
+    _showMessage('Army list imported.');
   }
 
   void _showMessage(String message) {
@@ -680,83 +739,85 @@ class _SavedArmiesPageState extends State<SavedArmiesPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
+      appBar: _savedArmyAppBar(),
+      body: _savedArmyList(),
+    );
+  }
+
+  PreferredSizeWidget _savedArmyAppBar() => AppBar(
         title: const Text('Saved armies'),
         actions: [
           IconButton(
             tooltip: 'Paste army list',
             onPressed: _pasting ? null : _pasteArmy,
-            icon: _pasting
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.content_paste),
+            icon: _actionIcon(_pasting, Icons.content_paste),
           ),
           IconButton(
             tooltip: 'Sync with API',
             onPressed: _syncing ? null : _sync,
-            icon: _syncing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  )
-                : const Icon(Icons.sync),
+            icon: _actionIcon(_syncing, Icons.sync),
           ),
         ],
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? _ErrorView(message: _error!, onRetry: _reload)
-              : _armies.isEmpty
-                  ? const Center(child: Text('No saved armies on this device.'))
-                  : ListView(
-                      padding: const EdgeInsets.all(12),
-                      children: [
-                        for (final army in _armies)
-                          Card(
-                            child: ListTile(
-                              title: Text(army['name']?.toString() ?? 'Army'),
-                              subtitle: Text(_armySummary(army)),
-                              onTap: () {
-                                final onOpen = widget.onOpen;
-                                if (onOpen != null) {
-                                  onOpen(army);
-                                  return;
-                                }
-                                Navigator.of(context)
-                                    .push(
-                                      MaterialPageRoute<void>(
-                                        builder: (_) => ArmyBuilderPage(
-                                          savedArmy: army,
-                                        ),
-                                      ),
-                                    )
-                                    .then((_) => _reload());
-                              },
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  IconButton(
-                                    tooltip: 'Copy army list',
-                                    onPressed: () => _copyArmy(army),
-                                    icon: const Icon(Icons.copy_outlined),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Delete army',
-                                    onPressed: () => _delete(army),
-                                    icon: const Icon(Icons.delete_outline),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                      ],
-                    ),
+      );
+
+  Widget _actionIcon(bool working, IconData icon) => working
+      ? const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(strokeWidth: 2),
+        )
+      : Icon(icon);
+
+  Widget _savedArmyList() {
+    if (_loading) return const Center(child: CircularProgressIndicator());
+    if (_error != null) return _ErrorView(message: _error!, onRetry: _reload);
+    if (_armies.isEmpty) {
+      return const Center(child: Text('No saved armies on this device.'));
+    }
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [for (final army in _armies) _savedArmyCard(army)],
     );
+  }
+
+  Widget _savedArmyCard(JsonMap army) => Card(
+        child: ListTile(
+          title: Text(army['name']?.toString() ?? 'Army'),
+          subtitle: Text(_armySummary(army)),
+          onTap: () => _openSavedArmy(army),
+          trailing: _armyActions(army),
+        ),
+      );
+
+  Widget _armyActions(JsonMap army) => Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            tooltip: 'Copy army list',
+            onPressed: () => _copyArmy(army),
+            icon: const Icon(Icons.copy_outlined),
+          ),
+          IconButton(
+            tooltip: 'Delete army',
+            onPressed: () => _delete(army),
+            icon: const Icon(Icons.delete_outline),
+          ),
+        ],
+      );
+
+  void _openSavedArmy(JsonMap army) {
+    final onOpen = widget.onOpen;
+    if (onOpen != null) {
+      onOpen(army);
+      return;
+    }
+    Navigator.of(context)
+        .push(
+          MaterialPageRoute<void>(
+            builder: (_) => ArmyBuilderPage(savedArmy: army),
+          ),
+        )
+        .then((_) => _reload());
   }
 }
 
