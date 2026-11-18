@@ -4,6 +4,13 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+fun requiredSigningVariable(name: String): String =
+    System.getenv(name)?.takeIf { it.isNotBlank() }
+        ?: throw GradleException("Missing environment variable: $name")
+
+val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+val hasReleaseSigningKey = !releaseKeystorePath.isNullOrBlank()
+
 android {
     namespace = "com.example.aos_client"
     compileSdk = flutter.compileSdkVersion
@@ -29,11 +36,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigningKey) {
+                storeFile = file(requiredSigningVariable("ANDROID_KEYSTORE_PATH"))
+                storePassword = requiredSigningVariable("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = requiredSigningVariable("ANDROID_KEY_ALIAS")
+                keyPassword = requiredSigningVariable("ANDROID_KEY_PASSWORD")
+                storeType = "PKCS12"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig =
+                if (hasReleaseSigningKey) {
+                    signingConfigs.getByName("release")
+                } else {
+                    signingConfigs.getByName("debug")
+                }
         }
     }
 }

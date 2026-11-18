@@ -6,6 +6,7 @@
 .pnp.js
 .idea
 *.jks
+*.p12
 
 # testing
 /coverage

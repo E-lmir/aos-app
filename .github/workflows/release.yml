@@ -33,9 +33,28 @@ jobs:
         working-directory: client
         run: flutter pub get
 
+      - name: Prepare Android signing key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "Missing GitHub secret: ANDROID_KEYSTORE_BASE64" >&2
+            exit 1
+          fi
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > client/android/app/upload-keystore.p12
+
       - name: Build release APK
         working-directory: client
         run: flutter build apk --release --build-number "${{ github.run_number }}"
+        env:
+          ANDROID_KEYSTORE_PATH: upload-keystore.p12
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+
+      - name: Remove Android signing key
+        if: always()
+        run: rm -f client/android/app/upload-keystore.p12
 
       - name: Create GitHub Release
         env:
