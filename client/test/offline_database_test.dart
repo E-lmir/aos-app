@@ -126,6 +126,7 @@ void main() {
           'abilityGroupId': 'battle-traits',
           'name': 'Battle Trait',
           'effect': 'Battle trait effect.',
+          'publicationId': 'art-publication',
         },
         {
           'id': 'other-enhancement',
@@ -151,6 +152,7 @@ void main() {
           'factionId': 'faction',
           'name': 'Test Battle Traits',
           'abilityGroupType': 'battleTraits',
+          'publicationId': 'art-publication',
         },
         {
           'id': 'other-enhancements',
@@ -532,12 +534,11 @@ void main() {
       (configuration['battle_formations'] as List).single['backgroundImage'],
       image,
     );
-    expect(
-      (configuration['battle_traits'] as List)
-          .single['abilities']
-          .single['name'],
-      'Battle Trait',
-    );
+    final battleTraits = (configuration['battle_traits'] as List).single;
+    expect(battleTraits['backgroundImage'], image);
+    final ability = (battleTraits['abilities'] as List).single;
+    expect(ability['name'], 'Battle Trait');
+    expect(ability['backgroundImage'], image);
     expect(
       (configuration['spell_lores'] as List).single['backgroundImage'],
       image,

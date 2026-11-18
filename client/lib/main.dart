@@ -42,18 +42,25 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  static const _sectionCount = 4;
   late final ApiClient _api = widget.apiClient ?? ApiClient();
+  final _keyboardFocusNode =
+      FocusNode(debugLabel: 'Home page keyboard navigation');
   int _selectedIndex = 0;
   JsonMap? _selectedArmy;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _keyboardFocusNode.requestFocus();
+    });
     unawaited(_api.checkApiAvailability());
   }
 
   @override
   void dispose() {
+    _keyboardFocusNode.dispose();
     if (widget.apiClient == null) _api.close();
     super.dispose();
   }
@@ -74,14 +81,45 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return PopScope<Object?>(
-      canPop: _selectedArmy == null || _selectedIndex != 0,
-      onPopInvokedWithResult: _handlePop,
-      child: Scaffold(
-        body: _pageStack(),
-        bottomNavigationBar: _navigationBar(),
+    return Focus(
+      focusNode: _keyboardFocusNode,
+      onKeyEvent: _handleKeyboardEvent,
+      child: PopScope<Object?>(
+        canPop: _selectedArmy == null || _selectedIndex != 0,
+        onPopInvokedWithResult: _handlePop,
+        child: Scaffold(
+          body: _pageStack(),
+          bottomNavigationBar: _navigationBar(),
+        ),
       ),
     );
+  }
+
+  KeyEventResult _handleKeyboardEvent(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent || !HardwareKeyboard.instance.isControlPressed) {
+      return KeyEventResult.ignored;
+    }
+    if (event.logicalKey == LogicalKeyboardKey.tab) {
+      final offset = HardwareKeyboard.instance.isShiftPressed ? -1 : 1;
+      _selectSection(
+        (_selectedIndex + offset + _sectionCount) % _sectionCount,
+      );
+      return KeyEventResult.handled;
+    }
+    final index = switch (event.logicalKey) {
+      LogicalKeyboardKey.digit1 => 0,
+      LogicalKeyboardKey.digit2 => 1,
+      LogicalKeyboardKey.digit3 => 2,
+      LogicalKeyboardKey.digit4 => 3,
+      _ => null,
+    };
+    if (index == null) return KeyEventResult.ignored;
+    _selectSection(index);
+    return KeyEventResult.handled;
+  }
+
+  void _selectSection(int index) {
+    setState(() => _selectedIndex = index);
   }
 
   void _handlePop(bool didPop, Object? result) {
@@ -111,9 +149,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _navigationBar() => NavigationBar(
         selectedIndex: _selectedIndex,
-        onDestinationSelected: (index) {
-          setState(() => _selectedIndex = index);
-        },
+        onDestinationSelected: _selectSection,
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.shield_outlined),
@@ -500,10 +536,9 @@ class _OfflineSettingsPageState extends State<OfflineSettingsPage> {
         title: const Text('Download all images'),
         subtitle: Text(_imageCacheDescription()),
         value: _imagesCached,
-        onChanged:
-            _imageStatusLoading || _working || _imageDownloadWorking
-                ? null
-                : _setImagesCached,
+        onChanged: _imageStatusLoading || _working || _imageDownloadWorking
+            ? null
+            : _setImagesCached,
       );
 
   String _imageCacheDescription() {

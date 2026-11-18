@@ -641,10 +641,11 @@ class OfflineDatabaseRepository {
             group['isLegends'] != true &&
             !excludedGroups.contains(group['id']))
         .map((group) => {
-              ...group,
+              ..._withPublicationBackgroundImage(group),
               'abilities': _rows('ability')
                   .where((ability) => ability['abilityGroupId'] == group['id'])
                   .map(_abilityWithKeywords)
+                  .map(_withPublicationBackgroundImage)
                   .toList(),
             })
         .toList();
@@ -762,11 +763,11 @@ class OfflineDatabaseRepository {
   }
 
   Set<Object?> _permittedRegimentIds(String factionId) => _rows(
-      'ability_group_regiment_of_renown_permitted_faction_keyword',
-    )
-        .where((link) => link['factionKeywordId'] == factionId)
-        .map((link) => link['abilityGroupId'])
-        .toSet();
+        'ability_group_regiment_of_renown_permitted_faction_keyword',
+      )
+          .where((link) => link['factionKeywordId'] == factionId)
+          .map((link) => link['abilityGroupId'])
+          .toSet();
 
   JsonMap _regimentOfRenownDetails(JsonMap group) => {
         ...group,

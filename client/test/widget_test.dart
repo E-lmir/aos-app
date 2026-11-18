@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -282,6 +283,53 @@ void main() {
     api.close();
   });
 
+  testWidgets('switches app sections with hardware keyboard shortcuts',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final api = _KeyboardNavigationApiClient();
+    await tester.pumpWidget(
+      MaterialApp(home: HomePage(apiClient: api)),
+    );
+    await tester.pump();
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(
+      LogicalKeyboardKey.digit2,
+      character: '2',
+    );
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.digit2);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      1,
+    );
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      2,
+    );
+
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.controlLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyDownEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.tab);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.shiftLeft);
+    await tester.sendKeyUpEvent(LogicalKeyboardKey.controlLeft);
+    await tester.pump();
+    expect(
+      tester.widget<NavigationBar>(find.byType(NavigationBar)).selectedIndex,
+      1,
+    );
+
+    api.close();
+  });
+
   testWidgets('groups Armies of Renown by their faction', (tester) async {
     final api = _RulesApiClient();
     await tester.pumpWidget(
@@ -389,6 +437,10 @@ void main() {
   testWidgets('shows faction traits and abilities in the army builder', (
     tester,
   ) async {
+    tester.view.physicalSize = const Size(800, 1800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
     final api = _RulesApiClient();
     await tester.pumpWidget(
       MaterialApp(home: ArmyBuilderPage(apiClient: api)),
@@ -399,6 +451,20 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(find.text('Stormcast Eternals').first);
     await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Battle Traits'));
+    await tester.pumpAndSettle();
+    expect(find.text('Test Faction Ability'), findsNothing);
+    await tester.tap(find.text('Battle Traits'));
+    await tester.pumpAndSettle();
+    expect(find.text('Test Faction Ability'), findsOneWidget);
+
+    await tester.tap(find.text('Army Options'));
+    await tester.pumpAndSettle();
+    expect(find.text('Battle Formation'), findsNothing);
+    await tester.tap(find.text('Army Options'));
+    await tester.pumpAndSettle();
+    expect(find.text('Battle Formation'), findsOneWidget);
 
     expect(find.text('Test Battle Traits'), findsOneWidget);
     expect(find.text('Test Faction Ability'), findsOneWidget);
@@ -602,6 +668,16 @@ void main() {
     expect(find.text('Enemy General'), findsOneWidget);
     expect(find.text('6 x Enemy Cavalry (Reinforced)'), findsOneWidget);
     expect(find.text('My Army'), findsNothing);
+    expect(
+      tester
+          .widgetList<DataThumbnail>(find.byType(DataThumbnail))
+          .map((thumbnail) => thumbnail.imageUrl),
+      containsAll([
+        'https://images.example/enemy-battle-traits.jpg',
+        'https://images.example/enemy-faction-ability.jpg',
+        'https://images.example/enemy-formation.jpg',
+      ]),
+    );
     api.close();
   });
 
@@ -1039,12 +1115,17 @@ class _RulesApiClient extends ApiClient {
           {
             'id': 'battle-traits',
             'name': 'Test Battle Traits',
+            if (factionId == 'enemy-faction')
+              'backgroundImage':
+                  'https://images.example/enemy-battle-traits.jpg',
             'abilities': [
               {
                 'id': 'trait-ability',
                 'name': factionId == 'enemy-faction'
                     ? 'Enemy Faction Ability'
                     : 'Test Faction Ability',
+                if (factionId == 'enemy-faction')
+                  'image': 'https://images.example/enemy-faction-ability.jpg',
                 'phaseDetails': 'Any hero phase',
                 'effect': factionId == 'enemy-faction'
                     ? 'Enemy faction effect.'
@@ -1158,6 +1239,11 @@ class _RulesApiClient extends ApiClient {
       };
 }
 
+class _KeyboardNavigationApiClient extends _RulesApiClient {
+  @override
+  Future<bool> checkApiAvailability() async => false;
+}
+
 class _SaveDialogHarnessState extends State<_SaveDialogHarness> {
   String? _savedName;
 
@@ -1225,7 +1311,8 @@ JsonMap _opponentArmyData() => {
       'selected_options': {
         'battle_formation': {
           'id': 'enemy-formation',
-          'name': 'Enemy Formation'
+          'name': 'Enemy Formation',
+          'backgroundImage': 'https://images.example/enemy-formation.jpg',
         },
         'tactics': [],
       },

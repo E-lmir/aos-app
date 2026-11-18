@@ -1910,29 +1910,44 @@ class _ArmyBuilderPageState extends State<ArmyBuilderPage> {
       );
 
   Widget _opponentBattleTraitsCard(List<JsonMap> groups) => Card(
-        child: Column(
+        child: ExpansionTile(
+          initiallyExpanded: true,
+          leading: const Icon(Icons.military_tech_outlined),
+          title: const Text('Battle Traits'),
           children: [
             for (final group in groups) ...[
               ListTile(
-                leading: const Icon(Icons.military_tech_outlined),
+                leading: _opponentTraitGroupLeading(group),
                 title: Text(group['name']?.toString() ?? 'Battle Traits'),
               ),
               for (final ability in _asMaps(group['abilities']))
-                _opponentBattleTraitTile(ability),
+                _opponentBattleTraitTile(ability, group),
             ],
           ],
         ),
       );
 
-  Widget _opponentBattleTraitTile(JsonMap ability) => ListTile(
-        contentPadding: const EdgeInsets.only(left: 40),
-        title: Text(ability['name']?.toString() ?? 'Faction ability'),
-        subtitle: ability['phaseDetails'] is String
-            ? Text(ability['phaseDetails'].toString())
-            : null,
-        trailing: const Icon(Icons.info_outline),
-        onTap: () => _showItemDetails(ability),
-      );
+  Widget _opponentTraitGroupLeading(JsonMap group) {
+    final imageUrl = dataPreviewImageUrl(group);
+    return imageUrl == null
+        ? const Icon(Icons.military_tech_outlined)
+        : DataThumbnail(imageUrl: imageUrl, size: 36);
+  }
+
+  Widget _opponentBattleTraitTile(JsonMap ability, JsonMap group) {
+    final imageUrl = dataPreviewImageUrl(ability) ?? dataPreviewImageUrl(group);
+    return ListTile(
+      contentPadding: const EdgeInsets.only(left: 40),
+      leading:
+          imageUrl == null ? null : DataThumbnail(imageUrl: imageUrl, size: 36),
+      title: Text(ability['name']?.toString() ?? 'Faction ability'),
+      subtitle: ability['phaseDetails'] is String
+          ? Text(ability['phaseDetails'].toString())
+          : null,
+      trailing: const Icon(Icons.info_outline),
+      onTap: () => _showItemDetails(ability),
+    );
+  }
 
   bool _hasSelectedArmyOptions(JsonMap options) =>
       _selectedArmyOptions(options).isNotEmpty ||
@@ -1951,41 +1966,47 @@ class _ArmyBuilderPageState extends State<ArmyBuilderPage> {
     final selectedOptions = _selectedArmyOptions(options);
     final tactics = _asMaps(options['tactics']);
     return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Army Options',
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-            for (final option in selectedOptions) _opponentOptionTile(option),
-            for (final tactic in tactics) _opponentTacticTile(tactic),
-          ],
-        ),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        leading: const Icon(Icons.tune_outlined),
+        title: const Text('Army Options'),
+        childrenPadding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          for (final option in selectedOptions) _opponentOptionTile(option),
+          for (final tactic in tactics) _opponentTacticTile(tactic),
+        ],
       ),
     );
   }
 
-  Widget _opponentOptionTile((String, Object?) option) => ListTile(
-        dense: true,
-        title: Text(option.$1),
-        subtitle: Text(_itemName(option.$2)),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () {
-          final item = _asMap(option.$2);
-          if (item != null) _showItemDetails(item);
-        },
-      );
+  Widget _opponentOptionTile((String, Object?) option) {
+    final item = _asMap(option.$2);
+    final imageUrl = item == null ? null : dataPreviewImageUrl(item);
+    return ListTile(
+      dense: true,
+      leading:
+          imageUrl == null ? null : DataThumbnail(imageUrl: imageUrl, size: 36),
+      title: Text(option.$1),
+      subtitle: Text(_itemName(option.$2)),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        if (item != null) _showItemDetails(item);
+      },
+    );
+  }
 
-  Widget _opponentTacticTile(JsonMap tactic) => ListTile(
-        dense: true,
-        title: const Text('Battle Tactic'),
-        subtitle: Text(_tacticName(tactic)),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () => _showItemDetails(tactic),
-      );
+  Widget _opponentTacticTile(JsonMap tactic) {
+    final imageUrl = dataPreviewImageUrl(tactic);
+    return ListTile(
+      dense: true,
+      leading:
+          imageUrl == null ? null : DataThumbnail(imageUrl: imageUrl, size: 36),
+      title: const Text('Battle Tactic'),
+      subtitle: Text(_tacticName(tactic)),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () => _showItemDetails(tactic),
+    );
+  }
 
   Widget _opponentRegimentOfRenownCard(JsonMap regiment) => Card(
         child: Column(
@@ -2143,12 +2164,11 @@ class _ArmyBuilderPageState extends State<ArmyBuilderPage> {
     if (groups.isEmpty) return const SizedBox.shrink();
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: _battleTraitWidgets(groups),
-        ),
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        leading: const Icon(Icons.military_tech_outlined),
+        title: const Text('Battle Traits'),
+        children: _battleTraitWidgets(groups),
       ),
     );
   }
@@ -2178,17 +2198,18 @@ class _ArmyBuilderPageState extends State<ArmyBuilderPage> {
   Widget _buildArmyOptions() {
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
-      child: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Army options',
-                style: Theme.of(context).textTheme.titleMedium),
-            ..._armyOptionEntries(),
-            _battleTacticsTile(),
-          ],
+      child: ExpansionTile(
+        initiallyExpanded: true,
+        leading: const Icon(Icons.tune_outlined),
+        title: Text(
+          'Army Options',
+          style: Theme.of(context).textTheme.titleMedium,
         ),
+        childrenPadding: const EdgeInsets.symmetric(horizontal: 12),
+        children: [
+          ..._armyOptionEntries(),
+          _battleTacticsTile(),
+        ],
       ),
     );
   }
